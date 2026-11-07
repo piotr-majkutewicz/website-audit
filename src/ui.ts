@@ -7,7 +7,22 @@ export function renderUi(nonce: string, lang: Lang = DEFAULT_LANG): string {
   const t = (key: UiKey) => escapeHtml(ui[key]);
   // Both languages are embedded, so the switch works without another request for the page.
   const texts = Object.fromEntries(
-    LANGS.map((l) => [l, { ...dictionary(l).ui, disclaimer: dictionary(l).disclaimer }]),
+    LANGS.map((l) => {
+      const d = dictionary(l);
+      return [
+        l,
+        {
+          ui: { ...d.ui, disclaimer: d.disclaimer },
+          findings: d.findings,
+          passed: d.passed,
+          basis: d.basis,
+          facts: d.facts,
+          categories: d.categories,
+          errors: d.errors,
+          notChecked: d.notChecked,
+        },
+      ];
+    }),
   );
   const pressed = (l: Lang) => (l === lang ? "true" : "false");
 
@@ -140,6 +155,26 @@ ul.plain{padding-left:20px}
 .skeleton .sk-text,.skeleton .sk-score,.skeleton .sk-note,.skeleton .cats li,.skeleton .cats b,.skeleton .cats span.muted,.skeleton h2,.skeleton .finding{animation:shimmer 1s ease-in-out infinite alternate}
 .error{animation:rise .25s ease-out}
 }
+.tops{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:12px;counter-reset:t}
+.tops li{counter-increment:t;position:relative;border:1px solid var(--line2);border-left:4px solid var(--line2);border-radius:8px;padding:12px 16px 12px 56px}
+.tops li.high{border-left-color:var(--accent)}.tops li.medium{border-left-color:var(--warn)}
+.tops li::before{content:counter(t);position:absolute;left:14px;top:12px;width:28px;height:28px;border-radius:50%;background:var(--text);color:#14110f;font-weight:800;display:flex;align-items:center;justify-content:center}
+.tops h3{margin:0 0 4px;font-size:1.05rem}
+.tops p{margin:0}
+.basis{font-size:.85rem;color:var(--muted);margin:0}
+.finding p.basis{margin-top:6px}
+details.scoring{border:1px solid var(--line);border-radius:8px;padding:0 16px 4px;margin:16px 0}
+details.scoring summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:600}
+.psi{border:1px solid var(--line);border-radius:8px;padding:4px 16px 12px;margin-top:24px}
+.psi h2{margin:12px 0}
+.psi .row{padding:8px 0;border-top:1px solid var(--line)}
+.psi .row p{margin:0}
+.psi-value{font-weight:700;font-variant-numeric:tabular-nums}
+.chip{display:inline-block;font-size:.8rem;font-weight:700;padding:1px 8px;border-radius:10px;border:1px solid currentColor}
+.chip.good{color:var(--ok)}.chip.needs{color:var(--warn)}.chip.poor{color:var(--accent)}
+.psi .load-text{position:relative;top:auto;margin:0 0 12px;padding:8px 0 14px;border:0;background:transparent}
+.psi .load-text .bar{left:0;right:0;bottom:2px}
+.report.still .rv,.report.still .meter i{animation:none}
 @media (prefers-reduced-motion:reduce){.load-text .bar i{width:100%;opacity:.35}}
 </style>
 </head>
@@ -199,6 +234,8 @@ ul.plain{padding-left:20px}
   // request is given up after TIMEOUT_MS (the server stops on its own after about 15 seconds).
   var SLOW_MS = 8000;
   var TIMEOUT_MS = 20000;
+  // The optional PageSpeed measurement is allowed to take longer (the server waits up to 45 seconds).
+  var PSI_TIMEOUT_MS = 50000;
   var form = document.getElementById("form");
   var input = document.getElementById("url");
   var go = document.getElementById("go");
@@ -216,6 +253,9 @@ ul.plain{padding-left:20px}
   var reportEl = document.getElementById("report");
   var lang = SERVER_LANG;
   var lastUrl = null;
+  var lastReport = null; // the language-neutral report of the last audit
+  var lastError = null; // { kind, code, key, message } of the last error
+  var psi = { state: "idle", data: null, key: null, url: null };
   var runId = 0;
   var busy = false;
   var userScrolled = false;
@@ -227,15 +267,16 @@ ul.plain{padding-left:20px}
   function readStored() { try { return window.localStorage.getItem("lang"); } catch (e) { return null; } }
   function writeStored(v) { try { window.localStorage.setItem("lang", v); } catch (e) { /* the page works without storage */ } }
   function reduced() { return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }
-  function T(key, params) {
-    var s = TEXTS[lang][key] || "";
-    if (params) for (var k in params) s = s.split("{" + k + "}").join(String(params[k]));
-    return s;
+  function D() { return TEXTS[lang]; }
+  function fmt(tpl, params) {
+    return String(tpl || "").replace(/\\{(\\w+)\\}/g, function (m, k) { return params && Object.prototype.hasOwnProperty.call(params, k) ? String(params[k]) : m; });
   }
+  function T(key, params) { return fmt(D().ui[key], params); }
   function setText(node, key) { node.setAttribute("data-i18n", key); node.textContent = T(key); }
   // The live region tells screen reader users what is happening. A trailing no-break space makes
   // a repeated message count as a change.
-  function announce(msg) { flip = !flip; live.textContent = msg + (flip ? "\u00a0" : ""); }
+  function announce(msg) { flip = !flip; live.textContent = msg + (flip ? " " : ""); }
+  function num(n, digits) { return n.toLocaleString(lang === "pl" ? "pl-PL" : "en-GB", { maximumFractionDigits: digits }); }
 
   // el("tag", {class: "x"}, "text" | [children]) builds nodes with textContent only.
   function el(tag, attrs, content) {
@@ -249,8 +290,8 @@ ul.plain{padding-left:20px}
   function level(score) { return score >= 80 ? "lv-good" : score >= 50 ? "lv-mid" : "lv-low"; }
 
   // Counts a number up from 0. Without motion the final value is set at once.
-  function countUp(node, to) {
-    if (reduced()) { node.textContent = String(to); return; }
+  function countUp(node, to, animate) {
+    if (!animate || reduced()) { node.textContent = String(to); return; }
     var start = null;
     node.textContent = "0";
     function step(ts) {
@@ -262,42 +303,185 @@ ul.plain{padding-left:20px}
     window.requestAnimationFrame(step);
   }
 
-  function render(r) {
-    var n = 0; // position in the entrance cascade, capped so long reports do not wait
-    function rv(node) { node.classList.add("rv"); node.style.setProperty("--i", String(Math.min(n++, 14))); return node; }
+  // Texts of a finding in the current language, built from the neutral report and the dictionary.
+  function findingText(f) {
+    var t = D().findings[f.key] || {};
+    return {
+      title: fmt(t.title, f.params),
+      detail: t.detail ? fmt(t.detail, f.params) : "",
+      why: fmt(t.why, f.params),
+      fix: fmt(t.fix, f.params),
+      impact: fmt(t.impact, f.params),
+      basis: fmt(D().basis[f.basis], f.params)
+    };
+  }
+
+  function render(n, animate) {
+    var i = 0; // position in the entrance cascade, capped so long reports do not wait
+    function rv(node) {
+      if (animate) { node.classList.add("rv"); node.style.setProperty("--i", String(Math.min(i++, 14))); }
+      return node;
+    }
+    reportEl.classList.toggle("still", !animate);
     reportEl.replaceChildren();
-    reportEl.appendChild(rv(el("p", { class: "muted" }, T("reportFor", { url: r.url }))));
-    var scoreNum = el("strong", { class: level(r.score) }, String(r.score));
+    reportEl.appendChild(rv(el("p", { class: "muted" }, T("reportFor", { url: n.url }))));
+    var scoreNum = el("strong", { class: level(n.score) }, String(n.score));
     reportEl.appendChild(rv(el("div", { class: "score" }, [scoreNum, el("span", null, T("scoreOutOf"))])));
-    countUp(scoreNum, r.score);
-    reportEl.appendChild(el("ul", { class: "cats" }, r.categories.map(function (c) {
+    countUp(scoreNum, n.score, animate);
+    reportEl.appendChild(el("ul", { class: "cats" }, n.categories.map(function (c) {
       var bar = el("i");
       var li = rv(el("li", { class: level(c.score) }, [
         el("b", null, String(c.score)),
-        el("span", { class: "muted" }, c.name),
+        el("span", { class: "muted" }, D().categories[c.id] || c.id),
         el("span", { class: "meter" }, [bar])
       ]));
       bar.style.setProperty("--v", String(c.score));
-      bar.style.setProperty("--i", li.style.getPropertyValue("--i"));
+      bar.style.setProperty("--i", li.style.getPropertyValue("--i") || "0");
       return li;
     })));
 
-    reportEl.appendChild(rv(el("h2", null, T("thingsToFix", { count: r.findings.length }))));
-    if (r.findings.length === 0) reportEl.appendChild(rv(el("p", null, T("noProblems"))));
-    r.findings.forEach(function (f) {
-      var title = f.title + (f.detail ? " (" + f.detail + ")" : "");
+    // The most important things first, with one sentence about what they mean for the business.
+    if (n.top.length > 0) {
+      reportEl.appendChild(rv(el("h2", null, T("topHeading"))));
+      reportEl.appendChild(el("ol", { class: "tops" }, n.top.map(function (idx) {
+        var f = n.findings[idx];
+        var x = findingText(f);
+        return rv(el("li", { class: f.severity }, [
+          el("h3", null, x.title),
+          el("p", null, [el("strong", null, T("impactLabel")), document.createTextNode(x.impact)])
+        ]));
+      })));
+    }
+
+    reportEl.appendChild(rv(el("h2", null, T("thingsToFix", { count: n.findings.length }))));
+    if (n.findings.length === 0) reportEl.appendChild(rv(el("p", null, T("noProblems"))));
+    n.findings.forEach(function (f) {
+      var x = findingText(f);
+      var title = x.title + (x.detail ? " (" + x.detail + ")" : "");
       reportEl.appendChild(rv(el("article", { class: "finding " + f.severity }, [
         el("h3", null, [el("span", { class: "badge" }, T(SEVERITY[f.severity]) || f.severity), document.createTextNode(title)]),
-        el("p", null, [el("strong", null, T("why")), document.createTextNode(f.why)]),
-        el("p", null, [el("strong", null, T("fix")), document.createTextNode(f.fix)])
+        el("p", null, [el("strong", null, T("why")), document.createTextNode(x.why)]),
+        el("p", null, [el("strong", null, T("fix")), document.createTextNode(x.fix)]),
+        el("p", { class: "basis" }, [el("strong", null, T("basisLabel")), document.createTextNode(x.basis)])
       ])));
     });
 
-    reportEl.appendChild(el("h2", null, T("passedHeading", { count: r.passed.length })));
-    reportEl.appendChild(el("ul", { class: "plain passed" }, r.passed.map(function (p) { return el("li", null, p.title); })));
+    reportEl.appendChild(el("h2", null, T("passedHeading", { count: n.passed.length })));
+    reportEl.appendChild(el("ul", { class: "plain passed" }, n.passed.map(function (p) { return el("li", null, D().passed[p.id] || p.id); })));
+
+    if (n.pagespeedAvailable) reportEl.appendChild(el("section", { class: "psi", id: "psi" }));
+
+    if (n.facts.length > 0) {
+      reportEl.appendChild(el("h2", null, T("factsHeading")));
+      reportEl.appendChild(el("ul", { class: "plain" }, n.facts.map(function (f) { return el("li", null, fmt(D().facts[f.id], f.params)); })));
+    }
+
+    // Scope of the check, so it is clear that this is one page plus a small sample.
+    var cov = n.coverage;
+    reportEl.appendChild(el("h2", null, T("coverageHeading")));
+    reportEl.appendChild(el("p", null, T("coverageSummary", { checks: cov.checks, requests: cov.requests, hosts: cov.hosts.join(", ") })));
+    if (cov.links || cov.resources) {
+      reportEl.appendChild(el("p", null, T("coverageSample", {
+        linksChecked: cov.links ? cov.links.checked : 0, linksTotal: cov.links ? cov.links.total : 0,
+        resourcesChecked: cov.resources ? cov.resources.checked : 0, resourcesTotal: cov.resources ? cov.resources.total : 0
+      })));
+    } else reportEl.appendChild(el("p", null, T("coverageNoSample")));
+
+    var weights = Object.keys(n.scoring.weights).map(function (id) { return (D().categories[id] || id) + " " + n.scoring.weights[id] + "%"; }).join(", ");
+    reportEl.appendChild(el("details", { class: "scoring" }, [
+      el("summary", null, T("scoringSummary")),
+      el("p", null, T("scoringIntro")),
+      el("p", null, T("scoringWeights", { weights: weights })),
+      el("p", null, T("scoringPenalty", n.scoring.penalty))
+    ]));
 
     reportEl.appendChild(el("h2", null, T("notCheckedHeading")));
-    reportEl.appendChild(el("ul", { class: "plain" }, r.notChecked.map(function (t) { return el("li", null, t); })));
+    reportEl.appendChild(el("ul", { class: "plain" }, D().notChecked.map(function (t) { return el("li", null, t); })));
+    renderPsi();
+  }
+
+  // ---- Optional PageSpeed Insights measurement (second stage) ----
+  var RATING = { lcp: [2500, 4000], cls: [0.1, 0.25], tbt: [200, 600], fcp: [1800, 3000], inp: [200, 500] };
+  function rate(kind, v) {
+    if (kind === "score") return v >= 90 ? "good" : v >= 50 ? "needs" : "poor";
+    var t = RATING[kind];
+    return v <= t[0] ? "good" : v <= t[1] ? "needs" : "poor";
+  }
+  var RATING_KEY = { good: "psiGood", needs: "psiNeeds", poor: "psiPoor" };
+
+  function renderPsi() {
+    var box = document.getElementById("psi");
+    if (!box) return;
+    box.replaceChildren();
+    box.appendChild(el("h2", null, T("psiHeading")));
+    if (psi.state === "loading") {
+      box.appendChild(el("p", { class: "load-text muted" }, [
+        el("span", { class: "spin", "aria-hidden": "true" }),
+        el("span", null, T("psiLoading")),
+        el("span", { class: "bar", "aria-hidden": "true" }, [el("i")])
+      ]));
+      return;
+    }
+    if (psi.state === "error") {
+      box.appendChild(el("p", { class: "muted" }, T("psiError", { reason: D().errors[psi.key] || D().errors.pagespeed_unavailable })));
+      return;
+    }
+    if (psi.state !== "done") return;
+    var r = psi.data;
+    var rows = [];
+    if (r.score !== null) rows.push(["psiScore", r.score + " / 100", rate("score", r.score), "psiScoreHelp"]);
+    if (r.lcpMs !== null) rows.push(["psiLcp", num(r.lcpMs / 1000, 1) + " s", rate("lcp", r.lcpMs), "psiLcpHelp"]);
+    if (r.cls !== null) rows.push(["psiCls", num(r.cls, 2), rate("cls", r.cls), "psiClsHelp"]);
+    if (r.tbtMs !== null) rows.push(["psiTbt", num(Math.round(r.tbtMs), 0) + " ms", rate("tbt", r.tbtMs), "psiTbtHelp"]);
+    if (r.fcpMs !== null) rows.push(["psiFcp", num(r.fcpMs / 1000, 1) + " s", rate("fcp", r.fcpMs), "psiFcpHelp"]);
+    if (r.inpMs !== null) rows.push(["psiInp", num(Math.round(r.inpMs), 0) + " ms", rate("inp", r.inpMs), "psiInpHelp"]);
+    box.appendChild(el("p", { class: "muted" }, T("psiSource")));
+    rows.forEach(function (row) {
+      box.appendChild(el("div", { class: "row" }, [
+        el("p", { class: "psi-line" }, [
+          el("strong", null, T(row[0])),
+          document.createTextNode(" "),
+          el("span", { class: "psi-value" }, row[1]),
+          document.createTextNode(" "),
+          el("span", { class: "chip " + row[2] }, T(RATING_KEY[row[2]]))
+        ]),
+        el("p", { class: "basis" }, T(row[3]))
+      ]));
+    });
+  }
+
+  function loadPsi(url, id) {
+    if (psi.url === url && psi.state !== "idle") { renderPsi(); return; }
+    psi = { state: "loading", data: null, key: null, url: url };
+    renderPsi();
+    var ctrl = new AbortController();
+    var t = window.setTimeout(function () { ctrl.abort(); }, PSI_TIMEOUT_MS);
+    fetch("/api/pagespeed?lang=" + lang, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: url }),
+      signal: ctrl.signal
+    }).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (data) { return { ok: res.ok, data: data }; });
+    }).then(function (r) {
+      window.clearTimeout(t);
+      if (id !== runId) return;
+      if (r.ok && r.data && r.data.pagespeed) {
+        psi.state = "done";
+        psi.data = r.data.pagespeed;
+        announce(T("psiHeading") + ": " + T("psiScore") + " " + (psi.data.score === null ? "" : psi.data.score + "/100"));
+      } else {
+        psi.state = "error";
+        psi.key = (r.data && r.data.error && r.data.error.key) || "pagespeed_unavailable";
+      }
+      renderPsi();
+    }).catch(function () {
+      window.clearTimeout(t);
+      if (id !== runId) return;
+      psi.state = "error";
+      psi.key = "pagespeed_timeout";
+      renderPsi();
+    });
   }
 
   function setBusy(on) {
@@ -322,25 +506,30 @@ ul.plain{padding-left:20px}
     setBusy(false);
   }
 
-  // Error kinds: "network", "timeout" or a response from the API (code and message).
-  function showError(kind, data) {
-    var code = data && data.error && data.error.code;
+  var CODE_HINT = {
+    rate_limited: "errorHintRate",
+    timeout: "errorHintSlow", unreachable: "errorHintSlow", too_many_redirects: "errorHintSlow", bad_response: "errorHintSlow",
+    bad_certificate: "errorHintCertificate"
+  };
+  var NO_RETRY = { blocked_target: 1, invalid_url: 1, invalid_json: 1, invalid_lang: 1, body_too_large: 1, invalid_body: 1 };
+
+  // Shows an error. e = { kind: "network" | "timeout" | "response", code, key, message }.
+  function showError(e, announceIt) {
+    lastError = e;
     var message, hint, retry = true;
-    if (kind === "network") { message = T("errorNetwork"); hint = "errorHintNetwork"; }
-    else if (kind === "timeout") { message = T("errorTimeout"); hint = "errorHintSlow"; }
+    if (e.kind === "network") { message = T("errorNetwork"); hint = "errorHintNetwork"; }
+    else if (e.kind === "timeout") { message = T("errorTimeout"); hint = "errorHintSlow"; }
     else {
-      message = (data && data.error && data.error.message) || T("errorGeneric");
-      if (code === "rate_limited") hint = "errorHintRate";
-      else if (code === "timeout" || code === "unreachable" || code === "too_many_redirects" || code === "bad_response") hint = "errorHintSlow";
-      else if (code === "blocked_target" || code === "invalid_url" || code === "invalid_json" || code === "invalid_lang" || code === "body_too_large" || code === "invalid_body") { hint = "errorHintBlocked"; retry = false; }
-      else hint = "errorHintGeneric";
+      message = (e.key && D().errors[e.key]) || e.message || T("errorGeneric");
+      hint = NO_RETRY[e.code] ? "errorHintBlocked" : (CODE_HINT[e.code] || "errorHintGeneric");
+      if (NO_RETRY[e.code]) retry = false;
     }
     reportEl.hidden = true;
     errorMsg.textContent = message;
     setText(errorHint, hint);
     retryBtn.hidden = !retry;
     errorEl.hidden = false;
-    announce(message + " " + T(hint));
+    if (announceIt) announce(message + " " + T(hint));
   }
 
   // Scrolls only when the report starts below the visible area and the person has not scrolled meanwhile.
@@ -353,17 +542,13 @@ ul.plain{padding-left:20px}
 
   function run(url, refresh) {
     var id = ++runId;
-    // For a language switch: where the first heading of the old report is on screen. Text above
-    // the report can change height with the language, so the position of the content is kept, not scrollY.
-    var anchor = refresh ? reportEl.querySelector("h2") : null;
-    var anchorTop = anchor ? resultEl.getBoundingClientRect().top + anchor.offsetTop : 0;
     var timedOut = false;
     lastUrl = url;
     clearTimers();
     errorEl.hidden = true;
     userScrolled = false;
     if (refresh && !reportEl.hidden) {
-      // Language switch: keep the old report in place, dimmed, with the loading note over it.
+      // Kept for a repeated audit of the same address: the old report stays, dimmed, under the note.
       reportEl.classList.add("refreshing");
       skeletonEl.hidden = true;
     } else {
@@ -395,25 +580,28 @@ ul.plain{padding-left:20px}
     }).then(function (r) {
       if (id !== runId) return;
       finish();
-      if (timedOut) { showError("timeout"); return; }
-      if (r.ok && r.data) {
-        render(r.data);
+      if (timedOut) { showError({ kind: "timeout" }, true); return; }
+      if (r.ok && r.data && r.data.neutral) {
+        lastReport = r.data.neutral;
+        lastError = null;
+        psi = { state: "idle", data: null, key: null, url: null };
+        render(lastReport, true);
         reportEl.hidden = false;
-        announce(T("announceDone", { score: r.data.score }));
-        var heading = refresh ? reportEl.querySelector("h2") : null;
-        if (heading) {
-          var delta = resultEl.getBoundingClientRect().top + heading.offsetTop - anchorTop;
-          if (Math.abs(delta) > 1) window.scrollBy(0, delta);
-        } else revealIfNeeded();
-      } else showError("response", r.data);
+        announce(T("announceDone", { score: lastReport.score }));
+        revealIfNeeded();
+        if (lastReport.pagespeedAvailable) loadPsi(lastReport.url, id);
+      } else {
+        var err = (r.data && r.data.error) || {};
+        showError({ kind: "response", code: err.code, key: err.key, message: err.message }, true);
+      }
     }).catch(function () {
       if (id !== runId) return;
       finish();
-      showError(timedOut ? "timeout" : "network");
+      showError({ kind: timedOut ? "timeout" : "network" }, true);
     });
   }
 
-  // Sets the language of every static text. Report texts come from the API in the same language.
+  // Sets the language of every static text.
   function apply(l) {
     lang = l;
     document.documentElement.lang = l;
@@ -426,6 +614,7 @@ ul.plain{padding-left:20px}
     document.querySelectorAll("[data-lang]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === l)); });
   }
 
+  // Changing the language never repeats the audit: the report is drawn again from the neutral data.
   function choose(l) {
     if (l === lang) return;
     writeStored(l);
@@ -434,9 +623,18 @@ ul.plain{padding-left:20px}
       u.searchParams.set("lang", l);
       window.history.replaceState(null, "", u.toString());
     } catch (e) { /* ignore */ }
+    // Where the first heading of the report is on screen, so the content can be kept in place.
+    var anchor = !reportEl.hidden ? reportEl.querySelector("h2") : null;
+    var anchorTop = anchor ? resultEl.getBoundingClientRect().top + anchor.offsetTop : 0;
     apply(l);
-    // Report and error texts come from the API, so a visible report, error or running request is repeated.
-    if (lastUrl && (!reportEl.hidden || !errorEl.hidden || busy)) run(lastUrl, !reportEl.hidden);
+    if (!reportEl.hidden && lastReport) {
+      render(lastReport, false);
+      var heading = reportEl.querySelector("h2");
+      if (heading) {
+        var delta = resultEl.getBoundingClientRect().top + heading.offsetTop - anchorTop;
+        if (Math.abs(delta) > 1) window.scrollBy(0, delta);
+      }
+    } else if (!errorEl.hidden && lastError) showError(lastError, false);
   }
 
   document.querySelectorAll("[data-lang]").forEach(function (b) {

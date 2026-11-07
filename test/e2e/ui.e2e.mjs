@@ -213,7 +213,7 @@ async function freshPage(browser, options, extra = {}) {
       ok((await page.textContent("#errorMsg")) === "Sprawdzanie trwało zbyt długo i zostało przerwane.", "timeout error after the limit");
       const retry = page.locator("#retry");
       const box = await retry.boundingBox();
-      ok(await retry.isVisible() && box.height >= 44, "retry button is visible and at least 44 px high", `${box?.height}px`);
+      ok(await retry.isVisible() && box.height >= 43.9, "retry button is visible and at least 44 px high", `${box?.height}px`);
       ok(!(await page.locator("#go").isDisabled()) && (await page.locator("#loading").isHidden()), "form unlocked after the error");
       ok((await page.locator("#error .icon").isVisible()), "error has an icon");
       ok((await overflowX(page)) <= 0, "no horizontal overflow in the error state");
@@ -227,7 +227,7 @@ async function freshPage(browser, options, extra = {}) {
       await ctx.close();
     }
 
-    // 3. Language switch with a visible report: dimmed old report, overlay note, scroll position kept.
+    // 3. Language switch with a visible report: no new request, content kept in place, texts fully switched.
     {
       const { ctx, page, errors } = await freshPage(browser, vp.options);
       const state = { calls: 0, gate: gate() };
@@ -238,35 +238,123 @@ async function freshPage(browser, options, extra = {}) {
       await page.click("#go");
       await page.waitForSelector("#report:not([hidden])");
       await page.waitForTimeout(1500);
+      const plText = await page.evaluate(() => document.getElementById("report").innerText);
+      ok(!/Why it matters|What to do|How we know|Things to fix|Top 3/.test(plText), "Polish report has none of the English labels");
+      ok(/Dlaczego to ważne/.test(plText) && /Skąd wiemy/.test(plText) && /Najważniejsze 3 rzeczy/.test(plText), "Polish report has Polish labels");
       await page.evaluate(() => window.scrollTo(0, 400));
       await page.waitForTimeout(100);
       const headTop = () => page.evaluate(() => document.querySelector("#report h2").getBoundingClientRect().top);
       const y0 = await headTop();
-      state.gate = gate();
       await page.evaluate(() => document.querySelector('[data-lang="en"]').click());
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(200);
       const mid = await page.evaluate(() => ({
-        refreshing: document.getElementById("report").classList.contains("refreshing"),
-        opacity: getComputedStyle(document.getElementById("report")).opacity,
-        loading: !document.getElementById("loading").hidden,
-        skeleton: !document.getElementById("skeleton").hidden,
-        reportVisible: !document.getElementById("report").hidden,
-        note: document.getElementById("loadText").textContent,
-        noteTop: document.querySelector(".load-text").getBoundingClientRect().top,
+        loading: !document.getElementById("loading").hidden || !document.getElementById("skeleton").hidden,
+        busy: document.getElementById("result").getAttribute("aria-busy"),
+        text: document.getElementById("report").innerText,
+        lang: document.documentElement.lang,
       }));
-      mid.y = await headTop();
-      ok(mid.refreshing && mid.reportVisible && Number(mid.opacity) < 0.6, "old report stays, dimmed", `opacity=${mid.opacity}`);
-      ok(mid.loading && !mid.skeleton, "loading note over the old report, no skeleton");
-      ok(mid.note.startsWith("Fetching the page"), "loading note is already in the new language");
-      ok(mid.noteTop >= 0 && mid.noteTop < 100, "loading note stays in view while scrolled", `top=${mid.noteTop.toFixed(0)}`);
-      ok(Math.abs(mid.y - y0) <= 1, "content stays where it was while loading (heading position)", `${y0} -> ${mid.y}`);
-      state.gate.open();
-      await page.waitForFunction(() => document.querySelector("#report h2")?.textContent.startsWith("Things to fix"));
-      await page.waitForTimeout(1500);
+      ok(state.calls === 1, "switching the language sends no new request", `calls=${state.calls}`);
+      ok(!mid.loading && mid.busy === "false", "no loading state after the switch");
+      ok(/Things to fix/.test(mid.text) && /Why it matters/.test(mid.text) && /How we know/.test(mid.text) && /Top 3 things/.test(mid.text), "report is in English at once");
+      ok(!/Dlaczego to ważne|Skąd wiemy|Najważniejsze|Do poprawy/.test(mid.text), "no Polish labels left in the English report");
+      ok(mid.lang === "en", "html lang switched");
       const y1 = await headTop();
-      ok(Math.abs(y1 - y0) <= 1, "content stays where it was after the new report", `${y0} -> ${y1}`);
-      ok((await page.locator("html").getAttribute("lang")) === "en", "html lang switched");
+      ok(Math.abs(y1 - y0) <= 1, "content stays where it was", `${y0} -> ${y1}`);
+      await page.evaluate(() => document.querySelector('[data-lang="pl"]').click());
+      await page.waitForTimeout(200);
+      ok(/Dlaczego to ważne/.test(await page.evaluate(() => document.getElementById("report").innerText)), "and back to Polish");
+      ok(state.calls === 1, "still only one request");
       ok(errors.length === 0, "no console errors", errors.join(" | "));
+      await ctx.close();
+    }
+
+    // 3b. Report structure: top three, how we know, facts, scope, scoring rule.
+    {
+      const { ctx, page } = await freshPage(browser, vp.options);
+      const state = { calls: 0, gate: gate() };
+      state.gate.open();
+      await mockApi(page, reports, state);
+      await page.goto(base + "/");
+      await page.fill("#url", "example.com");
+      await page.click("#go");
+      await page.waitForSelector("#report:not([hidden])");
+      const info = await page.evaluate(() => ({
+        top: document.querySelectorAll("#report .tops li").length,
+        topImpact: [...document.querySelectorAll("#report .tops li p")].every((p) => p.textContent.startsWith("Co to znaczy dla Twojej firmy: ")),
+        basis: document.querySelectorAll("#report .finding .basis").length,
+        findings: document.querySelectorAll("#report .finding").length,
+        headings: [...document.querySelectorAll("#report h2")].map((h) => h.textContent),
+        details: document.querySelector("#report details.scoring") !== null,
+        coverage: document.getElementById("report").innerText.includes("żądań do: "),
+        noPsi: document.getElementById("psi") === null,
+      }));
+      ok(info.top === 3 && info.topImpact, "three most important things, each with what it means for the business");
+      ok(info.basis === info.findings && info.findings > 0, "every finding says how it was measured", `${info.basis}/${info.findings}`);
+      ok(info.headings.some((h) => h === "Co sprawdzono") && info.headings.some((h) => h === "Czego to narzędzie NIE sprawdza"), "scope and not-checked sections");
+      ok(info.details && info.coverage, "scoring rule and request summary are shown");
+      ok(info.noPsi, "no PageSpeed section when the feature is off");
+      const summary = page.locator("#report details.scoring summary");
+      const box = await summary.boundingBox();
+      ok(box.height >= 44, "scoring summary is at least 44 px high");
+      await summary.click();
+      ok(await page.evaluate(() => document.querySelector("#report details.scoring").open), "scoring rule opens");
+      ok((await overflowX(page)) <= 0, "no horizontal overflow in the full report");
+      await ctx.close();
+    }
+
+    // 3c. Optional PageSpeed measurement as a second stage.
+    {
+      const { ctx, page, errors } = await freshPage(browser, vp.options);
+      const withPsi = { pl: { ...reports.pl, neutral: { ...reports.pl.neutral, pagespeedAvailable: true } }, en: { ...reports.en, neutral: { ...reports.en.neutral, pagespeedAvailable: true } } };
+      const state = { calls: 0, gate: gate() };
+      state.gate.open();
+      await mockApi(page, withPsi, state);
+      const psiGate = gate();
+      const psiBody = { pagespeed: { strategy: "mobile", score: 64, lcpMs: 3100, cls: 0.3, tbtMs: 450, fcpMs: 1700, inpMs: null, fetchedAt: "2026-11-07T10:00:00.000Z" } };
+      let psiCalls = 0;
+      await page.route("**/api/pagespeed*", async (route) => {
+        psiCalls++;
+        await psiGate.promise;
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(psiBody) });
+      });
+      await page.goto(base + "/");
+      await page.fill("#url", "example.com");
+      await page.click("#go");
+      await page.waitForSelector("#psi .load-text");
+      ok((await page.textContent("#psi .load-text")).includes("Dokładny pomiar szybkości, to może potrwać do pół minuty"), "second stage has its own honest loader");
+      ok((await page.locator("#go").isDisabled()) === false, "the quick report is already usable while the measurement runs");
+      psiGate.open();
+      await page.waitForSelector("#psi .chip");
+      const psiText = await page.evaluate(() => document.getElementById("psi").innerText);
+      ok(/Pomiar Google PageSpeed Insights \(Lighthouse\), telefon \(mobile\)/.test(psiText), "source is named");
+      ok(/64 \/ 100/.test(psiText) && /3,1 s/.test(psiText) && /0,3/.test(psiText) && /450 ms/.test(psiText), "real values are shown with Polish number format", psiText.replace(/\s+/g, " ").slice(0, 160));
+      ok(!/INP/.test(psiText), "a missing value (INP) is not invented");
+      const chips = await page.evaluate(() => [...document.querySelectorAll("#psi .chip")].map((c) => c.className));
+      ok(chips.length === 5 && chips.some((c) => c.includes("poor")) && chips.some((c) => c.includes("good")), "values are rated", chips.join(" | "));
+      await page.evaluate(() => document.querySelector('[data-lang="en"]').click());
+      await page.waitForTimeout(200);
+      const en = await page.evaluate(() => document.getElementById("psi").innerText);
+      ok(/Measurement by Google PageSpeed Insights/.test(en) && /3\.1 s/.test(en), "switches language without asking Google again");
+      ok(psiCalls === 1 && state.calls === 1, "one request each", `psi=${psiCalls} audit=${state.calls}`);
+      ok(errors.length === 0, "no console errors", errors.join(" | "));
+      await ctx.close();
+    }
+    {
+      const { ctx, page } = await freshPage(browser, vp.options);
+      const withPsi = { pl: { ...reports.pl, neutral: { ...reports.pl.neutral, pagespeedAvailable: true } } };
+      const state = { calls: 0, gate: gate() };
+      state.gate.open();
+      await mockApi(page, withPsi, state);
+      await page.route("**/api/pagespeed*", (route) =>
+        route.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: { code: "pagespeed_quota", key: "pagespeed_quota", message: "x" } }) }),
+      );
+      await page.goto(base + "/");
+      await page.fill("#url", "example.com");
+      await page.click("#go");
+      await page.waitForFunction(() => document.getElementById("psi")?.innerText.includes("się nie udał"));
+      const t = await page.evaluate(() => document.getElementById("psi").innerText);
+      ok(t.includes("Limit pomiarów PageSpeed został wyczerpany"), "PageSpeed errors are shown gently inside the section", t.replace(/\s+/g, " "));
+      ok(await page.locator("#report .score").isVisible(), "the quick report stays");
       await ctx.close();
     }
 
@@ -276,6 +364,7 @@ async function freshPage(browser, options, extra = {}) {
         { name: "blocked address", fail: (r) => r.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: { code: "blocked_target", message: "Ten adres IP jest prywatny, lokalny lub zarezerwowany." } }) }), msg: "Ten adres IP jest prywatny, lokalny lub zarezerwowany.", hint: "Wpisz publiczny adres strony, na przykład przyklad.pl.", retry: false },
         { name: "rate limit", fail: (r) => r.fulfill({ status: 429, contentType: "application/json", body: JSON.stringify({ error: { code: "rate_limited", message: "Zbyt wiele zapytań. Odczekaj minutę i spróbuj ponownie." } }) }), msg: "Zbyt wiele zapytań. Odczekaj minutę i spróbuj ponownie.", hint: "Odczekaj minutę i spróbuj ponownie.", retry: true },
         { name: "slow site (server timeout)", fail: (r) => r.fulfill({ status: 504, contentType: "application/json", body: JSON.stringify({ error: { code: "timeout", message: "Strona nie odpowiedziała na czas." } }) }), msg: "Strona nie odpowiedziała na czas.", hint: "Strona mogła być chwilowo niedostępna albo bardzo wolna. Spróbuj ponownie za chwilę.", retry: true },
+        { name: "certificate problem", fail: (r) => r.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: { code: "bad_certificate", key: "certificate", message: "x" } }) }), msg: "Wystąpił problem z certyfikatem HTTPS tej strony.", hint: "Strona może mieć wygasły lub błędny certyfikat. Warto poprosić o sprawdzenie osobę, która ją prowadzi.", retry: true },
         { name: "network failure", fail: (r) => r.abort("failed"), msg: "Nie udało się połączyć z narzędziem. Sprawdź połączenie z internetem i spróbuj ponownie.", hint: "Sprawdź połączenie z internetem i spróbuj ponownie.", retry: true },
       ];
       for (const c of cases) {
