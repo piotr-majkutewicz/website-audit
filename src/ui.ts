@@ -9,6 +9,7 @@ const PAGE = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Website audit for small businesses</title>
+<meta name="robots" content="noindex, nofollow">
 <meta name="description" content="A quick, unofficial check of one web page: HTTPS, security headers, basic SEO, page weight and basic accessibility.">
 <style nonce="__NONCE__">
 :root{--bg:#14110f;--text:#f2ebdd;--muted:#a99f90;--line:#2f2823;--line2:#4a4038;--accent:#ef4444;--ok:#7fb069;--warn:#e0a458}
@@ -40,6 +41,8 @@ button:disabled{opacity:.6;cursor:wait}
 .finding.medium .badge{color:var(--warn)}
 ul.plain{padding-left:20px}
 .passed li{color:var(--muted)}
+.cta{margin-top:24px}
+.cta a{color:var(--text);text-underline-offset:3px;display:inline-block;padding:10px 0}
 .note{border:1px solid var(--line);border-radius:8px;padding:12px 16px;background:#1a1613}
 [hidden]{display:none}
 @media (prefers-reduced-motion:no-preference){.report{animation:rise .4s ease-out}@keyframes rise{from{opacity:0;transform:translateY(8px)}}}
@@ -57,6 +60,7 @@ ul.plain{padding-left:20px}
   <p class="muted" id="status" role="status" aria-live="polite"></p>
   <div id="error" class="error" role="alert" hidden></div>
   <section id="report" class="report" hidden aria-label="Audit report"></section>
+  <p class="cta">Want help fixing these issues? <a href="https://piotrmajkutewicz.pl" rel="noopener">Talk to Piotr Majkutewicz.</a></p>
   <p class="note muted" id="disclaimer">This is an automated, unofficial and simplified check of a single page. It is not a replacement for a full audit.</p>
 </main>
 <script nonce="__NONCE__">

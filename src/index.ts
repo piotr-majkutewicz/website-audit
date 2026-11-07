@@ -16,6 +16,8 @@ const BASE_HEADERS: Record<string, string> = {
   "x-frame-options": "DENY",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
   "strict-transport-security": "max-age=31536000",
+  // The public demo must not be indexed. Crawlers can only see this if robots.txt allows crawling.
+  "x-robots-tag": "noindex, nofollow",
 };
 
 function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -31,30 +33,46 @@ function apiError(status: number, code: string, message: string, extra: Record<s
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
-      const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-      return new Response(request.method === "HEAD" ? null : renderUi(nonce), {
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          "cache-control": "no-store",
-          "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
-          ...BASE_HEADERS,
-        },
-      });
+    try {
+      return await route(request, env);
+    } catch {
+      // Never leak internals: nothing about the failure is sent to the client.
+      return apiError(500, "internal_error", "Something went wrong.");
     }
-
-    if (url.pathname === "/api/audit") {
-      if (request.method !== "POST") {
-        return apiError(405, "method_not_allowed", "Use POST with a JSON body {\"url\": \"...\"}.", { allow: "POST" });
-      }
-      return handleAudit(request, env);
-    }
-
-    return apiError(404, "not_found", "Not found.");
   },
 } satisfies ExportedHandler<Env>;
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+
+  if (url.pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
+    const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
+    return new Response(request.method === "HEAD" ? null : renderUi(nonce), {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        ...BASE_HEADERS,
+      },
+    });
+  }
+
+  // Crawling stays allowed on purpose, otherwise search engines could not read the noindex signal.
+  if (url.pathname === "/robots.txt" && (request.method === "GET" || request.method === "HEAD")) {
+    return new Response(request.method === "HEAD" ? null : "User-agent: *\nAllow: /\n", {
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...BASE_HEADERS },
+    });
+  }
+
+  if (url.pathname === "/api/audit") {
+    if (request.method !== "POST") {
+      return apiError(405, "method_not_allowed", "Use POST with a JSON body {\"url\": \"...\"}.", { allow: "POST" });
+    }
+    return handleAudit(request, env);
+  }
+
+  return apiError(404, "not_found", "Not found.");
+}
 
 async function handleAudit(request: Request, env: Env): Promise<Response> {
   // Rate limit first, before any expensive work. Skipped when the binding is not available.
@@ -67,8 +85,13 @@ async function handleAudit(request: Request, env: Env): Promise<Response> {
   }
 
   const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY_BYTES) return apiError(413, "body_too_large", "The request body is too large.");
-  const text = await request.text();
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return apiError(413, "body_too_large", "The request body is too large.");
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    return apiError(400, "invalid_body", "The request body could not be read.");
+  }
   if (text.length > MAX_BODY_BYTES) return apiError(413, "body_too_large", "The request body is too large.");
 
   let body: unknown;

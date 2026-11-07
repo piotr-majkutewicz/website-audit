@@ -39,4 +39,48 @@ describe("worker routes", () => {
     expect(res.headers.get("retry-after")).toBe("60");
     expect((await post(JSON.stringify({ url: "http://127.0.0.1/" }), {})).status).toBe(400);
   });
+
+  it("sends X-Robots-Tag noindex on every kind of response", async () => {
+    const denied: Env = { RATE_LIMITER: { limit: async () => ({ success: false }) } };
+    const responses = [
+      await call("/"),
+      await call("/", { method: "HEAD" }),
+      await call("/robots.txt"),
+      await call("/nope"),
+      await call("/api/audit"),
+      await post("not json"),
+      await post("x".repeat(5000)),
+      await post(JSON.stringify({ url: "http://127.0.0.1/" })),
+      await post(JSON.stringify({ url: "http://127.0.0.1/" }), denied),
+    ];
+    for (const res of responses) expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
+
+  it("puts a robots meta tag in the page and allows crawling in robots.txt", async () => {
+    const html = await (await call("/")).text();
+    expect(html).toContain('<meta name="robots" content="noindex, nofollow">');
+    const robots = await call("/robots.txt");
+    expect(await robots.text()).toBe("User-agent: *\nAllow: /\n");
+    expect((await call("/sitemap.xml")).status).toBe(404);
+  });
+
+  it("links to the owner's site with rel=noopener and keeps the CSP free of external sources", async () => {
+    const res = await call("/");
+    const html = await res.text();
+    expect(html).toContain('<a href="https://piotrmajkutewicz.pl" rel="noopener">');
+    expect(html).toContain("Want help fixing these issues?");
+    expect(html).not.toMatch(/<script[^>]+src=/i);
+    const csp = res.headers.get("content-security-policy")!;
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).not.toMatch(/https?:/);
+  });
+
+  it("does not leak internal details on unexpected failures", async () => {
+    const broken: Env = { RATE_LIMITER: { limit: async () => { throw new Error("secret internal detail"); } } };
+    const res = await post(JSON.stringify({ url: "https://example.com/" }), broken);
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(text).not.toContain("secret");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
 });
