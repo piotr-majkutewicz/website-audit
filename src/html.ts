@@ -19,6 +19,8 @@ export interface Heading {
 
 export interface ParsedHtml {
   tags: Tag[];
+  /** Text of <script type="application/ld+json"> blocks (at most 20, each cut at 200 KB). */
+  jsonLd: string[];
   title: string | null;
   headings: Heading[];
 }
@@ -67,6 +69,7 @@ function stripTags(s: string): string {
 export function parseHtml(html: string): ParsedHtml {
   const tags: Tag[] = [];
   const headings: Heading[] = [];
+  const jsonLd: string[] = [];
   let title: string | null = null;
   let labelDepth = 0;
   const lower = html.toLowerCase();
@@ -90,6 +93,9 @@ export function parseHtml(html: string): ParsedHtml {
     if (RAW_TEXT.has(name) || name === "title") {
       const end = lower.indexOf("</" + name, afterTag);
       const stop = end === -1 ? html.length : end;
+      if (name === "script" && /ld\+json/i.test(attrs["type"] ?? "") && jsonLd.length < 20) {
+        jsonLd.push(html.slice(afterTag, Math.min(stop, afterTag + 200_000)));
+      }
       if (name === "title" && title === null) {
         title = decodeEntities(html.slice(afterTag, stop)).replace(/\s+/g, " ").trim();
       }
@@ -104,7 +110,7 @@ export function parseHtml(html: string): ParsedHtml {
       headings.push({ level: Number(hm[1]), text: stripTags(c ? rest.slice(0, c.index) : rest.slice(0, 200)) });
     }
   }
-  return { tags, title, headings };
+  return { tags, jsonLd, title, headings };
 }
 
 export function findAll(doc: ParsedHtml, name: string): Tag[] {
