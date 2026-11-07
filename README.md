@@ -1,0 +1,153 @@
+# Website audit for small businesses
+
+A small Cloudflare Worker that takes a web address and returns a plain-language report: an overall score, scores per category, and a list of things to fix, each with a short explanation of why it matters and what to do.
+
+![The audit UI showing a report for example.com](docs/ui.png)
+
+It is a portfolio project by Piotr Majkutewicz (full-stack developer and solution architect working with small businesses and startups). It is meant as a conversation starter with a site owner, not as a replacement for a professional audit.
+
+## Who it is for
+
+- Owners of small business sites who want a quick, jargon-free look at the basics.
+- Developers and agencies who want a small, readable example of a Worker with a pure analysis core and a hardened network layer.
+
+## What it checks
+
+| Category | Checks |
+| --- | --- |
+| HTTPS and security headers | HTTPS, http to https redirect, HSTS (and its max-age), Content-Security-Policy, X-Content-Type-Options, clickjacking protection (X-Frame-Options or `frame-ancestors`), Referrer-Policy, Permissions-Policy, mixed content |
+| Basic SEO | status code, title and its length, meta description and its length, exactly one H1, canonical link, viewport, Open Graph tags, noindex (meta and header), `/robots.txt`, `/sitemap.xml` |
+| Page weight and delivery | HTML size, server response time, compression, caching headers, number of scripts and stylesheets, render-blocking scripts, images without width and height, images without `loading="lazy"` |
+| Basic accessibility | `lang` on `<html>`, `alt` on images, labels on form fields, heading order |
+
+Scoring: every category starts at 100. Each finding subtracts points by severity (high 25, medium 10, low 4, never below 0). The overall score is a weighted average of the categories (security 25, SEO 30, performance 25, accessibility 20). These thresholds and weights are my own heuristics. They are not an industry standard.
+
+### What this tool does NOT check
+
+- Real performance measurements such as Lighthouse, Core Web Vitals or field data from real visitors.
+- The quality, accuracy and usefulness of the content, and how well the site sells.
+- Legal compliance: privacy policy, cookie consent, GDPR, accessibility law.
+- Application security: vulnerabilities in code, plugins, forms or the server, and TLS certificate details.
+- Traffic, rankings, backlinks and anything that needs data from search engines or analytics.
+- Pages other than the one you enter, and anything that only appears after JavaScript runs.
+
+The score is not official and does not come from Google, Lighthouse or any other authority.
+
+## Run it locally
+
+Requirements: Node.js 22 or newer.
+
+```bash
+npm ci
+npm run dev          # wrangler dev, http://localhost:8787
+npm test             # unit tests, no network needed
+npm run typecheck    # tsc --noEmit
+```
+
+Try the API:
+
+```bash
+curl -s -X POST http://localhost:8787/api/audit \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com"}'
+```
+
+A private target is rejected:
+
+```bash
+curl -s -X POST http://localhost:8787/api/audit -d '{"url":"http://127.0.0.1"}'
+# {"error":{"code":"blocked_target","message":"This IP address is private, loopback or reserved."}}
+```
+
+## Deploy
+
+```bash
+npx wrangler login
+npm run deploy
+```
+
+No secrets, no database and no account identifiers are needed in the repository. The only binding is the rate limiter (see below).
+
+## Architecture
+
+```mermaid
+flowchart LR
+  UI[Browser UI] -->|POST /api/audit| W[index.ts: routing, rate limit, input checks]
+  W --> V[ssrf.ts: validate target]
+  V --> F[fetcher.ts: fetch with limits, manual redirects]
+  F -->|AuditInput| A[audit.ts: analyze]
+  A --> C[checks/*: pure functions]
+  C --> A
+  A -->|Report JSON| UI
+```
+
+- `src/ssrf.ts`: pure URL validation.
+- `src/fetcher.ts`: the only code that touches the network. It takes an injectable `fetch`, so tests run offline.
+- `src/html.ts`: a small tolerant tag tokenizer.
+- `src/checks/*.ts`: pure functions `(input, parsedHtml) => findings`. No I/O.
+- `src/audit.ts`: runs all checks and computes scores.
+- `src/ui.ts`: one static HTML page with inline CSS and a small script. No framework, no CDN, system fonts.
+
+## Design decisions and trade-offs
+
+- **Pure analysis, separate network layer.** All rules run on data that has already been fetched, so they are tested with HTML and header fixtures and no network.
+- **Own tokenizer instead of a DOM library.** Workers have no DOM. A small tokenizer keeps the bundle tiny and has no dependencies. The trade-off: it is not a full HTML5 parser, so unusual markup can be misread. Pages that build their content with JavaScript are only seen as the server sends them.
+- **No database, no state.** Reports are computed per request and not stored.
+- **Heuristic thresholds.** Limits such as the title length or HTML size are rules of thumb. The report words them as advice, not as facts.
+- **One page per audit.** Only the address you enter plus `/robots.txt`, `/sitemap.xml` and the plain `http://` version are requested.
+- **Compression detection.** Without an explicit `Accept-Encoding` header, the Workers runtime hides `content-encoding` on decoded responses, which made every site look uncompressed in my local tests. The fetcher therefore asks for `gzip` explicitly. The body still arrives decoded, so the size limit applies to the decoded body.
+
+## SSRF protection
+
+The target is validated before the first request and again for every redirect (redirects are followed manually, up to 5 hops):
+
+- only `http` and `https`; no credentials in the URL;
+- only ports 80 and 443;
+- rejects `localhost`, names without a dot, and suffixes such as `.local`, `.internal`, `.lan`, `.home.arpa`;
+- rejects private, loopback, link-local, CGNAT, multicast and reserved IPv4 ranges. The URL parser first normalizes tricky forms (decimal, hex, octal, short forms) to dotted notation, and the normalized value is what gets checked;
+- IPv6 literals: only global unicast (`2000::/3`) is allowed, minus documentation, 6to4 and Teredo ranges. Loopback, unique-local, link-local and IPv4-mapped addresses are rejected.
+
+The validation has tests in `test/ssrf.test.ts`, and the redirect handling in `test/fetcher.test.ts` (including a check that a redirect to a private address is never requested).
+
+Known gap: a Worker cannot resolve DNS before fetching, so a public-looking hostname that points to a private address (DNS rebinding) cannot be detected by this code. Requests from Cloudflare Workers do not reach private networks, which is the actual protection here, but I have not tested that, so treat it as a property of the platform and not of this code.
+
+## UI security
+
+- Report data comes from other people's sites, so the UI never uses `innerHTML`. Everything is inserted with `textContent` or text nodes (a test checks the page source for `innerHTML`).
+- The page is served with a strict Content-Security-Policy using a per-request nonce, `frame-ancestors 'none'`, `nosniff` and other headers.
+
+## Abuse protection
+
+`wrangler.jsonc` declares a [Workers rate limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/): 10 audits per 60 seconds per client IP. `namespace_id` is an arbitrary number I chose, not an account identifier.
+
+Limits of this approach, from the documentation: counters are kept per Cloudflare location and are eventually consistent, so the limit is approximate and not global. For a strict global limit you would need a Durable Object. A WAF or rate limiting rule on the zone is a good addition for a public deployment. The code works when the binding is missing: the check is skipped. Locally it worked in `wrangler dev` (see Verification).
+
+Other limits: 8 second timeout per request, 1.5 MB body limit, 5 redirects, 2 KB request body.
+
+## How to add a check
+
+1. Add a function to a file in `src/checks/` (or a new file) with the signature `(input: AuditInput, doc: ParsedHtml) => CheckOutcome`. Use the `Collector` helper: `c.check(ok, "Passed title", { id, severity, title, why, fix })`.
+2. If it is a new file, add the function to the `CHECKS` array in `src/audit.ts`.
+3. Add a fixture or a case in `test/checks.test.ts`.
+
+If the check needs new data (for example another header or file), add it to `AuditInput` in `src/types.ts` and fill it in `src/fetcher.ts`.
+
+## Verification
+
+Measured on 2026-11-07:
+
+- `npm run typecheck` passes with no errors.
+- `npm test`: 4 test files, 39 tests, all passing, no network used.
+- `npx wrangler dev` plus `curl`: `POST /api/audit` for `https://example.com` returned a report (score 64 at that time; the number depends on the live page and will change). `http://127.0.0.1` and `http://localhost` returned `400 blocked_target`. After 10 requests within a minute the local rate limiter answered `429`. A bare `github.com` was normalized to `https://github.com/` and audited.
+- I have not deployed this to Cloudflare, so the behavior of the rate limiter and outbound requests in production is untested.
+
+## Limitations
+
+- One page, as served to a server-side request. No JavaScript is run.
+- Some sites block or serve different content to automated requests.
+- The response time is measured once from a Cloudflare data center, not from your visitors.
+- It does not follow links or crawl the site.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
