@@ -128,7 +128,9 @@ async function freshPage(browser, options, extra = {}) {
       ok(state.calls === 1, "a second submit while busy sends no second request", `calls=${state.calls}`);
       ok((await overflowX(page)) <= 0, "no horizontal overflow while loading");
       const before = await measure(page, "#skeleton");
-      await page.screenshot({ path: `/tmp/claude-0/e2e-loading-${vp.options.isMobile ? "m" : "d"}.png`, fullPage: false });
+      if (process.env.E2E_SHOTS_DIR) {
+        await page.screenshot({ path: `${process.env.E2E_SHOTS_DIR}/e2e-loading-${vp.options.isMobile ? "m" : "d"}.png`, fullPage: false });
+      }
       state.gate.open();
       await page.waitForSelector("#report:not([hidden])");
       const early = await page.evaluate(() => ({
