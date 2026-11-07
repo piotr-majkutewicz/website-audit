@@ -6,6 +6,12 @@ A small Cloudflare Worker that takes a web address and returns a plain-language 
 
 It is a portfolio project by Piotr Majkutewicz (full-stack developer and solution architect working with small businesses and startups). It is meant as a conversation starter with a site owner, not as a replacement for a professional audit.
 
+## Live demo
+
+The demo is intended to run at <https://audit.piotrmajkutewicz.pl>. It is only live after the Worker has been deployed (see "Deploying the demo"); until then the address does not work.
+
+The demo is **not indexed on purpose**: every response carries `X-Robots-Tag: noindex, nofollow`, the page has a `robots` meta tag, there is no sitemap, and `/robots.txt` allows crawling so that search engines can read the noindex signal.
+
 ## Who it is for
 
 - Owners of small business sites who want a quick, jargon-free look at the basics.
@@ -59,14 +65,16 @@ curl -s -X POST http://localhost:8787/api/audit -d '{"url":"http://127.0.0.1"}'
 # {"error":{"code":"blocked_target","message":"This IP address is private, loopback or reserved."}}
 ```
 
-## Deploy
+## Deploying the demo
 
 ```bash
 npx wrangler login
 npm run deploy
 ```
 
-No secrets, no database and no account identifiers are needed in the repository. The only binding is the rate limiter (see below).
+- `wrangler.jsonc` contains `routes` with `"custom_domain": true` for `audit.piotrmajkutewicz.pl`. On deploy, Wrangler creates the custom domain (DNS record and certificate) for you. The `piotrmajkutewicz.pl` zone must be on the Cloudflare account you log in with, and the host name must not already have a DNS record.
+- No secrets, no database and no account identifiers are needed in the repository. The only binding is the rate limiter (see below).
+- Extra protection (recommended for a public endpoint): in the Cloudflare dashboard open the zone, then Security, then WAF, then Rate limiting rules, and add a rule for the host `audit.piotrmajkutewicz.pl` and path `/api/audit` (method POST) that blocks or challenges an IP after a small number of requests per minute. Available options depend on your plan. This is separate from, and in addition to, the in-Worker limit.
 
 ## Architecture
 
@@ -105,11 +113,15 @@ The target is validated before the first request and again for every redirect (r
 - only ports 80 and 443;
 - rejects `localhost`, names without a dot, and suffixes such as `.local`, `.internal`, `.lan`, `.home.arpa`;
 - rejects private, loopback, link-local, CGNAT, multicast and reserved IPv4 ranges. The URL parser first normalizes tricky forms (decimal, hex, octal, short forms) to dotted notation, and the normalized value is what gets checked;
-- IPv6 literals: only global unicast (`2000::/3`) is allowed, minus documentation, 6to4 and Teredo ranges. Loopback, unique-local, link-local and IPv4-mapped addresses are rejected.
+- IPv6 literals: only global unicast (`2000::/3`) is allowed, minus documentation, 6to4 and the `2001::/23` protocol-assignment range (which includes Teredo). Loopback, unique-local, link-local, NAT64 and IPv4-mapped addresses are rejected. The URL parser also rewrites mapped forms such as `::ffff:127.0.0.1` before they are checked;
+- a single overall time limit (15 seconds) covers the page, all redirects and the helper requests, on top of the per-request timeout. Response bodies are read with a size limit and a deadline, so a server that sends bytes very slowly is cut off;
+- error responses use fixed, generic messages. Unexpected failures return `500 internal_error` without details.
 
 The validation has tests in `test/ssrf.test.ts`, and the redirect handling in `test/fetcher.test.ts` (including a check that a redirect to a private address is never requested).
 
 Known gap: a Worker cannot resolve DNS before fetching, so a public-looking hostname that points to a private address (DNS rebinding) cannot be detected by this code. Requests from Cloudflare Workers do not reach private networks, which is the actual protection here, but I have not tested that, so treat it as a property of the platform and not of this code.
+
+What remains: DNS rebinding as described above; a hostile site can still make the Worker download up to 1.5 MB per request from a public address (bounded by the rate limit); the rate limit is approximate (see Abuse protection); and the tool reveals to the target site that a Cloudflare Worker requested it.
 
 ## UI security
 
@@ -122,7 +134,7 @@ Known gap: a Worker cannot resolve DNS before fetching, so a public-looking host
 
 Limits of this approach, from the documentation: counters are kept per Cloudflare location and are eventually consistent, so the limit is approximate and not global. For a strict global limit you would need a Durable Object. A WAF or rate limiting rule on the zone is a good addition for a public deployment. The code works when the binding is missing: the check is skipped. Locally it worked in `wrangler dev` (see Verification).
 
-Other limits: 8 second timeout per request, 1.5 MB body limit, 5 redirects, 2 KB request body.
+Other limits: 8 second timeout per request and 15 seconds in total, 1.5 MB body limit, 5 redirects, 2 KB request body.
 
 ## How to add a check
 
@@ -137,8 +149,9 @@ If the check needs new data (for example another header or file), add it to `Aud
 Measured on 2026-11-07:
 
 - `npm run typecheck` passes with no errors.
-- `npm test`: 4 test files, 39 tests, all passing, no network used.
+- `npm test`: 4 test files, 47 tests, all passing, no network used.
 - `npx wrangler dev` plus `curl`: `POST /api/audit` for `https://example.com` returned a report (score 64 at that time; the number depends on the live page and will change). `http://127.0.0.1` and `http://localhost` returned `400 blocked_target`. After 10 requests within a minute the local rate limiter answered `429`. A bare `github.com` was normalized to `https://github.com/` and audited.
+- The noindex header was checked with `wrangler dev` and `curl` on `/`, `/robots.txt`, `/api/audit` errors and a 404.
 - I have not deployed this to Cloudflare, so the behavior of the rate limiter and outbound requests in production is untested.
 
 ## Limitations
