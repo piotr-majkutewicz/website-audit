@@ -5,8 +5,10 @@
  * resolves to a private address cannot be detected here. In practice Cloudflare
  * Workers cannot reach private networks anyway. See the README for details.
  */
+import type { ErrorKey } from "./i18n/types";
 
-export type UrlCheck = { ok: true; url: URL } | { ok: false; reason: string };
+/** On failure, `reason` is a key into the error texts in src/i18n. */
+export type UrlCheck = { ok: true; url: URL } | { ok: false; reason: ErrorKey };
 
 const ALLOWED_PORTS = new Set(["", "80", "443"]);
 
@@ -32,31 +34,31 @@ export function normalizeInput(raw: string): string {
 
 export function validateTarget(raw: string): UrlCheck {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048) {
-    return { ok: false, reason: "The address is empty or too long." };
+    return { ok: false, reason: "address_empty_or_long" };
   }
   let url: URL;
   try {
     url = new URL(normalizeInput(raw));
   } catch {
-    return { ok: false, reason: "This is not a valid web address." };
+    return { ok: false, reason: "address_invalid" };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { ok: false, reason: "Only http and https addresses are allowed." };
+    return { ok: false, reason: "scheme_not_allowed" };
   }
   if (url.username || url.password) {
-    return { ok: false, reason: "Addresses with credentials are not allowed." };
+    return { ok: false, reason: "credentials_not_allowed" };
   }
   if (!ALLOWED_PORTS.has(url.port)) {
-    return { ok: false, reason: "Only ports 80 and 443 are allowed." };
+    return { ok: false, reason: "port_not_allowed" };
   }
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host) return { ok: false, reason: "The address has no host name." };
+  if (!host) return { ok: false, reason: "no_host" };
 
   if (host.startsWith("[")) {
     const v6 = parseIPv6(host.slice(1, -1));
-    if (!v6) return { ok: false, reason: "Invalid IPv6 address." };
+    if (!v6) return { ok: false, reason: "ipv6_invalid" };
     if (!isPublicIPv6(v6)) {
-      return { ok: false, reason: "This IPv6 address is not public." };
+      return { ok: false, reason: "ipv6_not_public" };
     }
     return { ok: true, url };
   }
@@ -64,20 +66,20 @@ export function validateTarget(raw: string): UrlCheck {
   const v4 = parseIPv4(host);
   if (v4) {
     if (!isPublicIPv4(v4)) {
-      return { ok: false, reason: "This IP address is private, loopback or reserved." };
+      return { ok: false, reason: "ip_not_public" };
     }
     return { ok: true, url };
   }
   // Anything that still looks numeric (for example "1.2.3") is not a real hostname.
   if (/^[0-9.]+$/.test(host)) {
-    return { ok: false, reason: "Invalid IP address." };
+    return { ok: false, reason: "ip_invalid" };
   }
 
   if (host === "localhost" || !host.includes(".")) {
-    return { ok: false, reason: "Internal host names are not allowed." };
+    return { ok: false, reason: "host_internal" };
   }
   if (INTERNAL_SUFFIXES.some((s) => host.endsWith(s))) {
-    return { ok: false, reason: "Internal host names are not allowed." };
+    return { ok: false, reason: "host_internal" };
   }
   return { ok: true, url };
 }

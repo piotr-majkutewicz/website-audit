@@ -1,6 +1,33 @@
 export type Severity = "high" | "medium" | "low";
 export type CategoryId = "security" | "seo" | "performance" | "accessibility";
 
+import type { ErrorKey, FindingKey, Lang, Params, PassedId } from "./i18n/types";
+
+/**
+ * What the checks produce: stable ids, a text key and parameters. No user-facing text.
+ * Texts live in src/i18n and are added by localize() in audit.ts.
+ */
+export interface RawFinding {
+  /** Stable id of the check, for example "img-alt". */
+  id: string;
+  /** Key of the text variant, for example "title-length.short". */
+  key: FindingKey;
+  category: CategoryId;
+  severity: Severity;
+  params: Params;
+}
+
+export interface RawPassed {
+  id: PassedId;
+  category: CategoryId;
+}
+
+export interface CheckOutcome {
+  findings: RawFinding[];
+  passed: RawPassed[];
+}
+
+/** Finding as returned by the API: stable id plus texts in the requested language. */
 export interface Finding {
   id: string;
   category: CategoryId;
@@ -20,10 +47,7 @@ export interface PassedCheck {
   title: string;
 }
 
-export interface CheckOutcome {
-  findings: Finding[];
-  passed: PassedCheck[];
-}
+export type { ErrorKey, Lang };
 
 /** Everything the pure analysis functions need. No network access happens past this point. */
 export interface AuditInput {
@@ -52,6 +76,7 @@ export interface CategoryScore {
 }
 
 export interface Report {
+  lang: Lang;
   url: string;
   requestedUrl: string;
   fetchedAt: string;

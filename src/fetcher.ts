@@ -2,6 +2,7 @@
  * Network layer. Everything that touches the network lives here, so the analysis
  * code stays pure. `fetchImpl` is injectable so tests can run offline.
  */
+import type { ErrorKey } from "./i18n/types";
 import { validateTarget } from "./ssrf";
 import type { AuditInput } from "./types";
 
@@ -17,11 +18,12 @@ export const LIMITS = {
 const USER_AGENT = "website-audit/1.0 (simple site check; unofficial)";
 
 export class AuditError extends Error {
+  /** `messageKey` points to the user-facing text in src/i18n. The Error message stays a plain key. */
   constructor(
     readonly code: "blocked_target" | "unreachable" | "timeout" | "too_many_redirects" | "bad_response",
-    message: string,
+    readonly messageKey: ErrorKey,
   ) {
-    super(message);
+    super(messageKey);
   }
 }
 
@@ -105,7 +107,7 @@ export async function fetchChecked(
     if (!check.ok) throw new AuditError("blocked_target", check.reason);
 
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new AuditError("timeout", "The site did not respond in time.");
+    if (remaining <= 0) throw new AuditError("timeout", "timeout");
     const signal = AbortSignal.timeout(Math.min(LIMITS.timeoutMs, remaining));
 
     let res: Response;
@@ -126,9 +128,9 @@ export async function fetchChecked(
       });
     } catch (e) {
       if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
-        throw new AuditError("timeout", "The site did not respond in time.");
+        throw new AuditError("timeout", "timeout");
       }
-      throw new AuditError("unreachable", "Could not connect to the site. Check the address and try again.");
+      throw new AuditError("unreachable", "unreachable");
     }
 
     const location = res.headers.get("location");
@@ -136,13 +138,13 @@ export async function fetchChecked(
       await res.body?.cancel();
       redirects++;
       if (redirects > LIMITS.maxRedirects) {
-        throw new AuditError("too_many_redirects", "The site redirects too many times.");
+        throw new AuditError("too_many_redirects", "too_many_redirects");
       }
       let next: string;
       try {
         next = new URL(location, check.url).toString();
       } catch {
-        throw new AuditError("bad_response", "The site sent an invalid redirect.");
+        throw new AuditError("bad_response", "bad_redirect");
       }
       current = next;
       continue;
@@ -153,9 +155,9 @@ export async function fetchChecked(
       read = await readLimited(res, maxBytes, signal);
     } catch (e) {
       if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
-        throw new AuditError("timeout", "The site did not respond in time.");
+        throw new AuditError("timeout", "timeout");
       }
-      throw new AuditError("unreachable", "The connection was interrupted while reading the page.");
+      throw new AuditError("unreachable", "interrupted");
     }
     return {
       finalUrl: check.url.toString(),

@@ -1,16 +1,51 @@
+import { DEFAULT_LANG, dictionary, LANGS, type Lang, type UiKey } from "./i18n";
+
 /** The whole UI is one static page. Report data is only ever inserted with textContent. */
-export function renderUi(nonce: string): string {
-  return PAGE.replaceAll("__NONCE__", nonce);
+export function renderUi(nonce: string, lang: Lang = DEFAULT_LANG): string {
+  const ui = dictionary(lang).ui;
+  const t = (key: UiKey) => escapeHtml(ui[key]);
+  // Both languages are embedded, so the switch works without another request for the page.
+  const texts = Object.fromEntries(
+    LANGS.map((l) => [l, { ...dictionary(l).ui, disclaimer: dictionary(l).disclaimer }]),
+  );
+  const pressed = (l: Lang) => (l === lang ? "true" : "false");
+
+  return PAGE.replaceAll("__NONCE__", nonce)
+    .replaceAll("__LANG__", lang)
+    .replaceAll("__META_TITLE__", t("metaTitle"))
+    .replaceAll("__META_DESCRIPTION__", t("metaDescription"))
+    .replaceAll("__HEADING__", t("heading"))
+    .replaceAll("__INTRO__", t("intro"))
+    .replaceAll("__URL_LABEL__", t("urlLabel"))
+    .replaceAll("__URL_PLACEHOLDER__", t("urlPlaceholder"))
+    .replaceAll("__SUBMIT__", t("submit"))
+    .replaceAll("__LANG_SWITCH_LABEL__", t("langSwitchLabel"))
+    .replaceAll("__REPORT_LABEL__", t("reportLabel"))
+    .replaceAll("__CTA_TEXT__", t("ctaText"))
+    .replaceAll("__CTA_LINK__", t("ctaLink"))
+    .replaceAll("__DISCLAIMER__", escapeHtml(dictionary(lang).disclaimer))
+    .replaceAll("__PRESSED_PL__", pressed("pl"))
+    .replaceAll("__PRESSED_EN__", pressed("en"))
+    .replace("__TEXTS__", () => safeJson(texts));
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** JSON that is safe inside a <script> element. */
+function safeJson(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
 const PAGE = `<!doctype html>
-<html lang="en">
+<html lang="__LANG__">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Website audit for small businesses</title>
 <meta name="robots" content="noindex, nofollow">
-<meta name="description" content="A quick, unofficial check of one web page: HTTPS, security headers, basic SEO, page weight and basic accessibility.">
+<title>__META_TITLE__</title>
+<meta name="description" content="__META_DESCRIPTION__">
 <style nonce="__NONCE__">
 :root{--bg:#14110f;--text:#f2ebdd;--muted:#a99f90;--line:#2f2823;--line2:#4a4038;--accent:#ef4444;--ok:#7fb069;--warn:#e0a458}
 *{box-sizing:border-box}
@@ -41,6 +76,11 @@ button:disabled{opacity:.6;cursor:wait}
 .finding.medium .badge{color:var(--warn)}
 ul.plain{padding-left:20px}
 .passed li{color:var(--muted)}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.top h1{flex:1 1 auto}
+.lang{display:flex;gap:4px;flex:none}
+.lang button{min-width:44px;min-height:44px;padding:0 12px;border:1px solid var(--line2);background:transparent;color:var(--text);font-weight:600}
+.lang button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#14110f}
 .cta{margin-top:24px}
 .cta a{color:var(--text);text-underline-offset:3px;display:inline-block;padding:10px 0}
 .note{border:1px solid var(--line);border-radius:8px;padding:12px 16px;background:#1a1613}
@@ -50,28 +90,47 @@ ul.plain{padding-left:20px}
 </head>
 <body>
 <main>
-  <h1>Website audit for small businesses</h1>
-  <p class="muted">Enter an address and get a short report: HTTPS, security headers, basic SEO, page weight and basic accessibility, with plain-language advice on what to fix first.</p>
+  <header class="top">
+    <h1 data-i18n="heading">__HEADING__</h1>
+    <div class="lang" role="group" aria-label="__LANG_SWITCH_LABEL__" data-i18n-aria-label="langSwitchLabel">
+      <button type="button" data-lang="pl" lang="pl" aria-label="Polski" aria-pressed="__PRESSED_PL__">PL</button>
+      <button type="button" data-lang="en" lang="en" aria-label="English" aria-pressed="__PRESSED_EN__">EN</button>
+    </div>
+  </header>
+  <p class="muted" data-i18n="intro">__INTRO__</p>
   <form id="form">
-    <label for="url">Website address</label>
-    <input id="url" name="url" type="text" inputmode="url" autocomplete="url" placeholder="example.com" required maxlength="2048">
-    <button id="go" type="submit">Run audit</button>
+    <label for="url" data-i18n="urlLabel">__URL_LABEL__</label>
+    <input id="url" name="url" type="text" inputmode="url" autocomplete="url" placeholder="__URL_PLACEHOLDER__" data-i18n-placeholder="urlPlaceholder" required maxlength="2048">
+    <button id="go" type="submit" data-i18n="submit">__SUBMIT__</button>
   </form>
   <p class="muted" id="status" role="status" aria-live="polite"></p>
   <div id="error" class="error" role="alert" hidden></div>
-  <section id="report" class="report" hidden aria-label="Audit report"></section>
-  <p class="cta">Want help fixing these issues? <a href="https://piotrmajkutewicz.pl" rel="noopener">Talk to Piotr Majkutewicz.</a></p>
-  <p class="note muted" id="disclaimer">This is an automated, unofficial and simplified check of a single page. It is not a replacement for a full audit.</p>
+  <section id="report" class="report" hidden aria-label="__REPORT_LABEL__" data-i18n-aria-label="reportLabel"></section>
+  <p class="cta"><span data-i18n="ctaText">__CTA_TEXT__</span> <a href="https://piotrmajkutewicz.pl" rel="noopener" data-i18n="ctaLink">__CTA_LINK__</a></p>
+  <p class="note muted" id="disclaimer" data-i18n="disclaimer">__DISCLAIMER__</p>
 </main>
 <script nonce="__NONCE__">
 (function () {
+  var TEXTS = __TEXTS__;
+  var SERVER_LANG = "__LANG__";
   var form = document.getElementById("form");
   var input = document.getElementById("url");
   var go = document.getElementById("go");
   var statusEl = document.getElementById("status");
   var errorEl = document.getElementById("error");
   var reportEl = document.getElementById("report");
-  var disclaimerEl = document.getElementById("disclaimer");
+  var lang = SERVER_LANG;
+  var lastUrl = null;
+  var runId = 0;
+
+  function valid(v) { return v === "pl" || v === "en"; }
+  function readStored() { try { return window.localStorage.getItem("lang"); } catch (e) { return null; } }
+  function writeStored(v) { try { window.localStorage.setItem("lang", v); } catch (e) { /* the page works without storage */ } }
+  function T(key, params) {
+    var s = TEXTS[lang][key] || "";
+    if (params) for (var k in params) s = s.split("{" + k + "}").join(String(params[k]));
+    return s;
+  }
 
   // el("tag", {class: "x"}, "text" | [children]) builds nodes with textContent only.
   function el(tag, attrs, content) {
@@ -81,64 +140,111 @@ ul.plain{padding-left:20px}
     else if (content) content.forEach(function (c) { n.appendChild(c); });
     return n;
   }
-  var LABEL = { high: "High", medium: "Medium", low: "Low" };
+  var SEVERITY = { high: "severityHigh", medium: "severityMedium", low: "severityLow" };
 
   function render(r) {
     reportEl.replaceChildren();
-    reportEl.appendChild(el("p", { class: "muted" }, "Report for " + r.url));
+    reportEl.appendChild(el("p", { class: "muted" }, T("reportFor", { url: r.url })));
     reportEl.appendChild(el("div", { class: "score" }, [
       el("strong", null, String(r.score)),
-      el("span", null, "out of 100 (overall score of this tool, not an official rating)")
+      el("span", null, T("scoreOutOf"))
     ]));
     reportEl.appendChild(el("ul", { class: "cats" }, r.categories.map(function (c) {
       return el("li", null, [el("b", null, String(c.score)), el("span", { class: "muted" }, c.name)]);
     })));
 
-    reportEl.appendChild(el("h2", null, "Things to fix (" + r.findings.length + ")"));
-    if (r.findings.length === 0) reportEl.appendChild(el("p", null, "No problems found by these checks."));
+    reportEl.appendChild(el("h2", null, T("thingsToFix", { count: r.findings.length })));
+    if (r.findings.length === 0) reportEl.appendChild(el("p", null, T("noProblems")));
     r.findings.forEach(function (f) {
       var title = f.title + (f.detail ? " (" + f.detail + ")" : "");
       reportEl.appendChild(el("article", { class: "finding " + f.severity }, [
-        el("h3", null, [el("span", { class: "badge" }, LABEL[f.severity] || f.severity), document.createTextNode(title)]),
-        el("p", null, [el("strong", null, "Why it matters: "), document.createTextNode(f.why)]),
-        el("p", null, [el("strong", null, "What to do: "), document.createTextNode(f.fix)])
+        el("h3", null, [el("span", { class: "badge" }, T(SEVERITY[f.severity]) || f.severity), document.createTextNode(title)]),
+        el("p", null, [el("strong", null, T("why")), document.createTextNode(f.why)]),
+        el("p", null, [el("strong", null, T("fix")), document.createTextNode(f.fix)])
       ]));
     });
 
-    reportEl.appendChild(el("h2", null, "Checks passed (" + r.passed.length + ")"));
+    reportEl.appendChild(el("h2", null, T("passedHeading", { count: r.passed.length })));
     reportEl.appendChild(el("ul", { class: "plain passed" }, r.passed.map(function (p) { return el("li", null, p.title); })));
 
-    reportEl.appendChild(el("h2", null, "What this tool does NOT check"));
+    reportEl.appendChild(el("h2", null, T("notCheckedHeading")));
     reportEl.appendChild(el("ul", { class: "plain" }, r.notChecked.map(function (t) { return el("li", null, t); })));
-    disclaimerEl.textContent = r.disclaimer;
     reportEl.hidden = false;
   }
 
-  form.addEventListener("submit", function (e) {
-    e.preventDefault();
+  function run(url) {
+    var id = ++runId;
+    lastUrl = url;
     errorEl.hidden = true;
     reportEl.hidden = true;
     go.disabled = true;
-    statusEl.textContent = "Checking the site, this can take several seconds...";
-    fetch("/api/audit", {
+    statusEl.textContent = T("loading");
+    fetch("/api/audit?lang=" + lang, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url: input.value })
+      body: JSON.stringify({ url: url, lang: lang })
     }).then(function (res) {
       return res.json().catch(function () { return null; }).then(function (data) { return { ok: res.ok, data: data }; });
     }).then(function (r) {
+      if (id !== runId) return;
       if (r.ok && r.data) render(r.data);
       else {
-        errorEl.textContent = (r.data && r.data.error && r.data.error.message) || "Something went wrong. Please try again.";
+        errorEl.textContent = (r.data && r.data.error && r.data.error.message) || T("errorGeneric");
         errorEl.hidden = false;
       }
     }).catch(function () {
-      errorEl.textContent = "Could not reach the audit service. Check your connection and try again.";
+      if (id !== runId) return;
+      errorEl.textContent = T("errorNetwork");
       errorEl.hidden = false;
     }).then(function () {
+      if (id !== runId) return;
       go.disabled = false;
       statusEl.textContent = "";
     });
+  }
+
+  // Sets the language of every static text. Report texts come from the API in the same language.
+  function apply(l) {
+    lang = l;
+    document.documentElement.lang = l;
+    document.title = T("metaTitle");
+    var meta = document.querySelector('meta[name="description"]');
+    if (meta) meta.setAttribute("content", T("metaDescription"));
+    document.querySelectorAll("[data-i18n]").forEach(function (n) { n.textContent = T(n.getAttribute("data-i18n")); });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach(function (n) { n.setAttribute("placeholder", T(n.getAttribute("data-i18n-placeholder"))); });
+    document.querySelectorAll("[data-i18n-aria-label]").forEach(function (n) { n.setAttribute("aria-label", T(n.getAttribute("data-i18n-aria-label"))); });
+    document.querySelectorAll("[data-lang]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.getAttribute("data-lang") === l)); });
+  }
+
+  function choose(l) {
+    if (l === lang) return;
+    writeStored(l);
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.set("lang", l);
+      window.history.replaceState(null, "", u.toString());
+    } catch (e) { /* ignore */ }
+    apply(l);
+    errorEl.hidden = true;
+    // Report and error texts come from the API, so a visible report or a running request is repeated.
+    if (lastUrl && (!reportEl.hidden || go.disabled)) run(lastUrl);
+  }
+
+  document.querySelectorAll("[data-lang]").forEach(function (b) {
+    b.addEventListener("click", function () { choose(b.getAttribute("data-lang")); });
+  });
+
+  // Order of precedence: ?lang= in the address, then the saved choice, then Polish.
+  var fromQuery = new URLSearchParams(window.location.search).get("lang");
+  var initial = "pl";
+  if (valid(fromQuery)) { initial = fromQuery; writeStored(fromQuery); }
+  else if (valid(readStored())) initial = readStored();
+  if (initial !== SERVER_LANG) apply(initial);
+  else lang = initial;
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    run(input.value);
   });
 })();
 </script>

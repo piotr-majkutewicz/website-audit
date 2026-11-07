@@ -27,21 +27,21 @@ describe("analyze on a good page", () => {
   it("lists passed checks and the not-checked section", () => {
     expect(report.passed.length).toBeGreaterThan(15);
     expect(report.notChecked.length).toBeGreaterThan(3);
-    expect(report.disclaimer).toMatch(/unofficial/);
+    expect(report.disclaimer).toMatch(/nieoficjalne/);
+    expect(analyze(makeInput({ html: fixture("good.html"), headers: GOOD_HEADERS }), new Date(), "en").disclaimer).toMatch(/unofficial/);
   });
 });
 
 describe("analyze on a bad page", () => {
-  const report = analyze(
-    makeInput({
-      html: fixture("bad.html"),
-      finalUrl: "https://bad.example/",
-      headers: {},
-      httpRedirect: { redirectsToHttps: false },
-      robotsTxt: { found: false, hasSitemapLine: false },
-      sitemapXml: { found: false },
-    }),
-  );
+  const badInput = makeInput({
+    html: fixture("bad.html"),
+    finalUrl: "https://bad.example/",
+    headers: {},
+    httpRedirect: { redirectsToHttps: false },
+    robotsTxt: { found: false, hasSitemapLine: false },
+    sitemapXml: { found: false },
+  });
+  const report = analyze(badInput);
   const found = ids(report);
   it("reports the expected problems", () => {
     for (const id of [
@@ -52,10 +52,18 @@ describe("analyze on a bad page", () => {
   });
   it("counts things correctly", () => {
     const get = (id: string) => report.findings.find((f) => f.id === id)!;
+    expect(get("img-alt").detail).toBe("obrazów: 2 z 2");
+    expect(get("form-labels").detail).toBe("pól: 2 z 2");
+    expect(get("h1").detail).toBe("liczba nagłówków H1: 2");
+    expect(get("img-dimensions").detail).toBe("obrazów: 2 z 2");
+  });
+  it("gives the same counts in English", () => {
+    const en = analyze(badInput, new Date(), "en");
+    const get = (id: string) => en.findings.find((f) => f.id === id)!;
     expect(get("img-alt").detail).toBe("2 of 2 images");
     expect(get("form-labels").detail).toBe("2 of 2 fields");
     expect(get("h1").detail).toBe("H1 count: 2");
-    expect(get("img-dimensions").detail).toBe("2 of 2 images");
+    expect(en.findings.map((f) => f.id)).toEqual(report.findings.map((f) => f.id));
   });
   it("sorts by severity and keeps the score within 0..100", () => {
     const order = { high: 0, medium: 1, low: 2 };
