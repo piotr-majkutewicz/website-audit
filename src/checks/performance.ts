@@ -86,7 +86,7 @@ export function checkPerformance(input: AuditInput, doc: ParsedHtml): CheckOutco
     title: "Many external scripts",
     why: "Every script is a request and has to be downloaded, parsed and run, which slows the page and blocks interaction on weak phones.",
     fix: "Remove scripts you do not need (old plugins, unused trackers) and bundle the rest.",
-    detail: `${scripts.length} scripts`,
+    detail: `scripts: ${scripts.length}`,
   });
   const blocking = scripts.filter(
     (t) => !("async" in t.attrs) && !("defer" in t.attrs) && (t.attrs["type"] ?? "").toLowerCase() !== "module",
@@ -97,7 +97,7 @@ export function checkPerformance(input: AuditInput, doc: ParsedHtml): CheckOutco
     title: "Scripts that block rendering",
     why: "A script without async or defer stops the browser from showing the page until it is downloaded and run.",
     fix: "Add defer (or async) to external scripts, or load them at the end of the page.",
-    detail: `${blocking.length} scripts`,
+    detail: `scripts: ${blocking.length}`,
   });
   const styles = findAll(doc, "link").filter((t) => (t.attrs["rel"] ?? "").toLowerCase().split(/\s+/).includes("stylesheet"));
   c.check(styles.length <= MANY_STYLESHEETS, "A reasonable number of stylesheets", {
@@ -106,7 +106,7 @@ export function checkPerformance(input: AuditInput, doc: ParsedHtml): CheckOutco
     title: "Many stylesheets",
     why: "Each stylesheet blocks first render until it is downloaded.",
     fix: "Combine stylesheets and remove unused CSS.",
-    detail: `${styles.length} stylesheets`,
+    detail: `stylesheets: ${styles.length}`,
   });
 
   // Images

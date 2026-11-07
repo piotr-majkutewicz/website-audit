@@ -96,7 +96,15 @@ export async function fetchChecked(
       res = await fetchImpl(check.url.toString(), {
         method: "GET",
         redirect: "manual",
-        headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml,*/*;q=0.5" },
+        // Measured in wrangler dev: without an explicit Accept-Encoding the runtime drops the
+        // content-encoding header of the (already decoded) response, so compression would look
+        // missing. With it, the header is kept and the body is still delivered decoded.
+        // The size limit therefore applies to the decoded body.
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/html,application/xhtml+xml,*/*;q=0.5",
+          "accept-encoding": "gzip",
+        },
         signal: AbortSignal.timeout(LIMITS.timeoutMs),
       });
     } catch (e) {

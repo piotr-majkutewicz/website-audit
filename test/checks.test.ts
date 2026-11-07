@@ -54,7 +54,7 @@ describe("analyze on a bad page", () => {
     const get = (id: string) => report.findings.find((f) => f.id === id)!;
     expect(get("img-alt").detail).toBe("2 of 2 images");
     expect(get("form-labels").detail).toBe("2 of 2 fields");
-    expect(get("h1").detail).toBe("2 headings");
+    expect(get("h1").detail).toBe("H1 count: 2");
     expect(get("img-dimensions").detail).toBe("2 of 2 images");
   });
   it("sorts by severity and keeps the score within 0..100", () => {

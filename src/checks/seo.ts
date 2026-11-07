@@ -74,7 +74,7 @@ export function checkSeo(input: AuditInput, doc: ParsedHtml): CheckOutcome {
       title: "More than one H1 heading",
       why: "Several H1s blur the main topic of the page and confuse screen reader users.",
       fix: "Keep one <h1> and turn the others into <h2> or lower levels.",
-      detail: `${h1s.length} headings`,
+      detail: `H1 count: ${h1s.length}`,
     });
   }
 

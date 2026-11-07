@@ -105,7 +105,7 @@ export function checkSecurity(input: AuditInput, doc: ParsedHtml): CheckOutcome 
       title: "The HTTPS page loads resources over plain http://",
       why: "Browsers block or warn about such mixed content, so images or scripts may silently fail and the padlock disappears.",
       fix: "Change those links to https:// (or protocol-relative paths on your own domain).",
-      detail: `${mixed.length} resources`,
+      detail: `resources: ${mixed.length}`,
     });
   }
   return c.result();
