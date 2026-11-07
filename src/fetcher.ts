@@ -29,9 +29,30 @@ export const LIMITS = {
   maxSubrequests: 25,
   maxLinks: 10,
   maxResources: 8,
-  /** Probes in flight at once (a Worker can hold 6 open connections). */
+  /** Probes of links and files in flight at once. */
   probeConcurrency: 5,
+  /** Requests in flight at once across the whole audit. */
+  maxInFlight: 6,
 };
+
+/** Limits how many requests are in flight at once (a Worker can hold 6 open connections). */
+export class Gate {
+  private active = 0;
+  private waiting: (() => void)[] = [];
+  constructor(readonly limit: number) {}
+  async acquire(): Promise<void> {
+    if (this.active < this.limit) {
+      this.active++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
+  }
+  release(): void {
+    const next = this.waiting.shift();
+    if (next) next(); // the slot passes straight to the next waiter
+    else this.active--;
+  }
+}
 
 /** Counts requests and remembers which hosts were asked. One per audit. */
 export class Budget {
@@ -138,6 +159,7 @@ export async function fetchChecked(
     budget?: Budget;
     timeoutMs?: number;
     maxRedirects?: number;
+    gate?: Gate;
   } = {},
 ): Promise<Fetched> {
   const maxBytes = opts.maxBytes ?? LIMITS.maxBytes;
@@ -152,72 +174,78 @@ export async function fetchChecked(
     const check = validateTarget(current);
     if (!check.ok) throw new AuditError("blocked_target", check.reason);
 
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new AuditError("timeout", "timeout");
-    if (opts.budget && !opts.budget.take(check.url.hostname)) throw new AuditError("budget", "unreachable");
-    const signal = AbortSignal.timeout(Math.min(opts.timeoutMs ?? LIMITS.timeoutMs, remaining));
-
-    let res: Response;
+    // Wait for a free slot first, so time spent waiting does not count against the request's own timeout.
+    await opts.gate?.acquire();
     try {
-      res = await fetchImpl(check.url.toString(), {
-        method: opts.method ?? "GET",
-        redirect: "manual",
-        // Measured in wrangler dev: without an explicit Accept-Encoding the runtime drops the
-        // content-encoding header of the (already decoded) response, so compression would look
-        // missing. With it, the header is kept and the body is still delivered decoded.
-        // The size limit therefore applies to the decoded body.
-        headers: {
-          "user-agent": USER_AGENT,
-          accept: "text/html,application/xhtml+xml,*/*;q=0.5",
-          "accept-encoding": "gzip",
-        },
-        signal,
-      });
-    } catch (e) {
-      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
-        throw new AuditError("timeout", "timeout");
-      }
-      if (e instanceof Error && CERT_ERROR_RE.test(e.message)) {
-        throw new AuditError("bad_certificate", "certificate");
-      }
-      throw new AuditError("unreachable", "unreachable");
-    }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new AuditError("timeout", "timeout");
+      if (opts.budget && !opts.budget.take(check.url.hostname)) throw new AuditError("budget", "unreachable");
+      const signal = AbortSignal.timeout(Math.min(opts.timeoutMs ?? LIMITS.timeoutMs, remaining));
 
-    const location = res.headers.get("location");
-    if (follow && res.status >= 300 && res.status < 400 && location) {
-      await res.body?.cancel();
-      redirects++;
-      if (redirects > maxRedirects) {
-        throw new AuditError("too_many_redirects", "too_many_redirects");
-      }
-      let next: string;
+      let res: Response;
       try {
-        next = new URL(location, check.url).toString();
-      } catch {
-        throw new AuditError("bad_response", "bad_redirect");
+        res = await fetchImpl(check.url.toString(), {
+          method: opts.method ?? "GET",
+          redirect: "manual",
+          // Measured in wrangler dev: without an explicit Accept-Encoding the runtime drops the
+          // content-encoding header of the (already decoded) response, so compression would look
+          // missing. With it, the header is kept and the body is still delivered decoded.
+          // The size limit therefore applies to the decoded body.
+          headers: {
+            "user-agent": USER_AGENT,
+            accept: "text/html,application/xhtml+xml,*/*;q=0.5",
+            "accept-encoding": "gzip",
+          },
+          signal,
+        });
+      } catch (e) {
+        if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
+          throw new AuditError("timeout", "timeout");
+        }
+        if (e instanceof Error && CERT_ERROR_RE.test(e.message)) {
+          throw new AuditError("bad_certificate", "certificate");
+        }
+        throw new AuditError("unreachable", "unreachable");
       }
-      current = next;
-      continue;
-    }
 
-    let read;
-    try {
-      read = await readLimited(res, maxBytes, signal);
-    } catch (e) {
-      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
-        throw new AuditError("timeout", "timeout");
+      const location = res.headers.get("location");
+      if (follow && res.status >= 300 && res.status < 400 && location) {
+        await res.body?.cancel();
+        redirects++;
+        if (redirects > maxRedirects) {
+          throw new AuditError("too_many_redirects", "too_many_redirects");
+        }
+        let next: string;
+        try {
+          next = new URL(location, check.url).toString();
+        } catch {
+          throw new AuditError("bad_response", "bad_redirect");
+        }
+        current = next;
+        continue;
       }
-      throw new AuditError("unreachable", "interrupted");
+
+      let read;
+      try {
+        read = await readLimited(res, maxBytes, signal);
+      } catch (e) {
+        if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
+          throw new AuditError("timeout", "timeout");
+        }
+        throw new AuditError("unreachable", "interrupted");
+      }
+      return {
+        finalUrl: check.url.toString(),
+        setCookies: typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [],
+        status: res.status,
+        headers: headersToObject(res.headers),
+        ...read,
+        redirectCount: redirects,
+        ms: Date.now() - started,
+      };
+    } finally {
+      opts.gate?.release();
     }
-    return {
-      finalUrl: check.url.toString(),
-      setCookies: typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [],
-      status: res.status,
-      headers: headersToObject(res.headers),
-      ...read,
-      redirectCount: redirects,
-      ms: Date.now() - started,
-    };
   }
 }
 
@@ -244,7 +272,8 @@ const siteKey = (host: string) => host.toLowerCase().replace(/^www\./, "");
 export async function collect(requestedUrl: string, fetchImpl: FetchImpl): Promise<AuditInput> {
   const deadline = Date.now() + LIMITS.totalTimeoutMs;
   const budget = new Budget(LIMITS.maxSubrequests);
-  const page = await fetchChecked(requestedUrl, fetchImpl, { deadline, budget });
+  const gate = new Gate(LIMITS.maxInFlight);
+  const page = await fetchChecked(requestedUrl, fetchImpl, { deadline, budget, gate });
   const final = new URL(page.finalUrl);
   const origin = final.origin;
   const doc = parseHtml(page.body);
@@ -261,7 +290,7 @@ export async function collect(requestedUrl: string, fetchImpl: FetchImpl): Promi
   };
   const aux = (url: string, extra: Parameters<typeof fetchChecked>[2] = {}) =>
     attempt(() =>
-      fetchChecked(url, fetchImpl, { maxBytes: LIMITS.auxMaxBytes, deadline, budget, maxRedirects: LIMITS.auxMaxRedirects, ...extra }),
+      fetchChecked(url, fetchImpl, { maxBytes: LIMITS.auxMaxBytes, deadline, budget, gate, maxRedirects: LIMITS.auxMaxRedirects, ...extra }),
     );
 
   const httpTest = async (): Promise<AuditInput["httpRedirect"]> => {
@@ -318,7 +347,7 @@ export async function collect(requestedUrl: string, fetchImpl: FetchImpl): Promi
 
   /** HEAD request that falls back to a one byte GET when the server does not accept HEAD. */
   const probe = async (url: string): Promise<Fetched | null> => {
-    const opts = { maxBytes: 1, followRedirects: false, deadline, budget, timeoutMs: LIMITS.probeTimeoutMs } as const;
+    const opts = { maxBytes: 1, followRedirects: false, deadline, budget, gate, timeoutMs: LIMITS.probeTimeoutMs } as const;
     return attempt(async () => {
       let r = await fetchChecked(url, fetchImpl, { ...opts, method: "HEAD" });
       if (r.status === 405 || r.status === 501) r = await fetchChecked(url, fetchImpl, { ...opts, method: "GET" });
