@@ -76,6 +76,10 @@ npm run deploy
 - No secrets, no database and no account identifiers are needed in the repository. The only binding is the rate limiter (see below).
 - Extra protection (recommended for a public endpoint): in the Cloudflare dashboard open the zone, then Security, then WAF, then Rate limiting rules, and add a rule for the host `audit.piotrmajkutewicz.pl` and path `/api/audit` (method POST) that blocks or challenges an IP after a small number of requests per minute. Available options depend on your plan. This is separate from, and in addition to, the in-Worker limit.
 
+### Deploying from GitHub Actions
+
+The repository includes a manual workflow (`.github/workflows/deploy.yml`). Add two repository secrets (Settings, Secrets and variables, Actions): `CLOUDFLARE_API_TOKEN` (a token with permission to edit Workers and the DNS zone of the domain) and `CLOUDFLARE_ACCOUNT_ID`. Then run Actions, Deploy, Run workflow on `main`. The workflow runs the type check and the tests first.
+
 ## Architecture
 
 ```mermaid
