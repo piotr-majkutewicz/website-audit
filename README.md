@@ -12,6 +12,45 @@ The demo is intended to run at <https://audit.piotrmajkutewicz.pl>. It is only l
 
 The demo is **not indexed on purpose**: every response carries `X-Robots-Tag: noindex, nofollow`, the page has a `robots` meta tag, there is no sitemap, and `/robots.txt` allows crawling so that search engines can read the noindex signal.
 
+## Languages
+
+The UI and the report are in Polish by default, whatever the browser language is. The PL / EN switch in the page header changes the language. The choice is remembered in `localStorage` (the page works without it), and `?lang=pl` or `?lang=en` in the address takes precedence over the saved choice and updates it. The `<html lang>` attribute follows the selected language. If a report is visible when you switch, the audit is repeated in the new language, because the report texts come from the API (this counts against the rate limit).
+
+### API format
+
+`POST /api/audit` takes `{"url": "...", "lang": "pl" | "en"}`. `lang` is optional and defaults to `pl`. An unknown value is rejected with `400 invalid_lang`. For error messages that are produced before the body is read (rate limit, wrong method, 404), `?lang=` in the query string is used, and an unknown value there falls back to `pl`.
+
+The response contains stable ids and texts in the requested language:
+
+```json
+{
+  "lang": "en",
+  "url": "https://example.com/",
+  "score": 64,
+  "categories": [{ "id": "security", "name": "HTTPS and security headers", "score": 33 }],
+  "findings": [
+    {
+      "id": "img-alt",
+      "category": "accessibility",
+      "severity": "high",
+      "title": "Images without an alt attribute",
+      "why": "...",
+      "fix": "...",
+      "detail": "2 of 5 images"
+    }
+  ],
+  "passed": [{ "id": "https", "category": "security", "title": "The page is served over HTTPS" }],
+  "notChecked": ["..."],
+  "disclaimer": "..."
+}
+```
+
+`id` values, `category` ids and `severity` do not change with the language, so they are safe to use in code. Error responses are `{"error": {"code": "...", "message": "..."}}` with a stable `code` and a translated `message`.
+
+### Where the texts live
+
+The checks in `src/checks/` return only ids, a text key and parameters (for example `{ count: 2, total: 5 }`). All user-facing text is in `src/i18n/pl.ts` and `src/i18n/en.ts`, typed by `src/i18n/types.ts`, which lists every key. A missing key is a TypeScript error, and `test/i18n.test.ts` checks that every finding the checks can produce has a non-empty text in both languages, with no leftover `{placeholders}`. To add a language, add a dictionary and register it in `src/i18n/index.ts` and `LANGS`.
+
 ## Who it is for
 
 - Owners of small business sites who want a quick, jargon-free look at the basics.
@@ -55,13 +94,13 @@ Try the API:
 ```bash
 curl -s -X POST http://localhost:8787/api/audit \
   -H 'content-type: application/json' \
-  -d '{"url":"https://example.com"}'
+  -d '{"url":"https://example.com","lang":"en"}'
 ```
 
 A private target is rejected:
 
 ```bash
-curl -s -X POST http://localhost:8787/api/audit -d '{"url":"http://127.0.0.1"}'
+curl -s -X POST http://localhost:8787/api/audit -d '{"url":"http://127.0.0.1","lang":"en"}'
 # {"error":{"code":"blocked_target","message":"This IP address is private, loopback or reserved."}}
 ```
 
@@ -97,7 +136,8 @@ flowchart LR
 - `src/fetcher.ts`: the only code that touches the network. It takes an injectable `fetch`, so tests run offline.
 - `src/html.ts`: a small tolerant tag tokenizer.
 - `src/checks/*.ts`: pure functions `(input, parsedHtml) => findings`. No I/O.
-- `src/audit.ts`: runs all checks and computes scores.
+- `src/audit.ts`: runs all checks, computes scores and adds the texts for the requested language.
+- `src/i18n/`: the Polish and English dictionaries, the only place with user-facing texts.
 - `src/ui.ts`: one static HTML page with inline CSS and a small script. No framework, no CDN, system fonts.
 
 ## Design decisions and trade-offs
@@ -142,7 +182,7 @@ Other limits: 8 second timeout per request and 15 seconds in total, 1.5 MB body 
 
 ## How to add a check
 
-1. Add a function to a file in `src/checks/` (or a new file) with the signature `(input: AuditInput, doc: ParsedHtml) => CheckOutcome`. Use the `Collector` helper: `c.check(ok, "Passed title", { id, severity, title, why, fix })`.
+1. Add a function to a file in `src/checks/` (or a new file) with the signature `(input: AuditInput, doc: ParsedHtml) => CheckOutcome`. Use the `Collector` helper: `c.check(ok, { id, key?, severity, params? })`. Add the new key to `FINDING_KEYS` (and the id to `PASSED_IDS` if the check can pass) in `src/i18n/types.ts`, then write the texts in both `src/i18n/pl.ts` and `src/i18n/en.ts`.
 2. If it is a new file, add the function to the `CHECKS` array in `src/audit.ts`.
 3. Add a fixture or a case in `test/checks.test.ts`.
 
@@ -153,9 +193,10 @@ If the check needs new data (for example another header or file), add it to `Aud
 Measured on 2026-11-07:
 
 - `npm run typecheck` passes with no errors.
-- `npm test`: 4 test files, 47 tests, all passing, no network used.
+- `npm test`: 5 test files, 62 tests, all passing, no network used.
 - `npx wrangler dev` plus `curl`: `POST /api/audit` for `https://example.com` returned a report (score 64 at that time; the number depends on the live page and will change). `http://127.0.0.1` and `http://localhost` returned `400 blocked_target`. After 10 requests within a minute the local rate limiter answered `429`. A bare `github.com` was normalized to `https://github.com/` and audited.
 - The noindex header was checked with `wrangler dev` and `curl` on `/`, `/robots.txt`, `/api/audit` errors and a 404.
+- Language switch checked with Playwright against `wrangler dev`: default Polish with an English browser locale, switching with the keyboard, the choice kept after reload, `?lang=` taking precedence, and a working switch when `localStorage` throws. The switch buttons are 44 px high.
 - I have not deployed this to Cloudflare, so the behavior of the rate limiter and outbound requests in production is untested.
 
 ## Limitations
