@@ -98,6 +98,7 @@ export function isPublicIPv4(p: number[]): boolean {
   if (a === 172 && b >= 16 && b <= 31) return false;
   if (a === 192 && b === 0 && c === 0) return false;
   if (a === 192 && b === 0 && c === 2) return false; // documentation
+  if (a === 192 && b === 88 && c === 99) return false; // deprecated 6to4 relay anycast
   if (a === 192 && b === 168) return false;
   if (a === 198 && (b === 18 || b === 19)) return false; // benchmarking
   if (a === 198 && b === 51 && c === 100) return false; // documentation
@@ -146,6 +147,7 @@ export function isPublicIPv6(g: number[]): boolean {
   if ((first & 0xe000) !== 0x2000) return false; // loopback, ULA, link-local, mapped IPv4, etc.
   if (first === 0x2001 && g[1] === 0x0db8) return false; // documentation
   if (first === 0x2002) return false; // 6to4 embeds IPv4 addresses
-  if (first === 0x2001 && g[1] === 0) return false; // Teredo
+  if (first === 0x2001 && g[1]! < 0x200) return false; // 2001::/23 protocol assignments (Teredo, ORCHID, benchmarking)
+  if (first === 0x3fff && (g[1]! & 0xf000) === 0) return false; // 3fff::/20 documentation
   return true;
 }

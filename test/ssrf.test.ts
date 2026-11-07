@@ -92,4 +92,21 @@ describe("normalizeInput", () => {
     expect(normalizeInput(" example.com ")).toBe("https://example.com");
     expect(normalizeInput("http://example.com")).toBe("http://example.com");
   });
+
+  it("rejects more reserved ranges and IPv6 forms", () => {
+    bad("http://192.88.99.1/");
+    bad("http://[2001::1]/");
+    bad("http://[2001:10::1]/");
+    bad("http://[3fff::1]/");
+    bad("http://[::ffff:127.0.0.1]/");
+    bad("http://[::ffff:7f00:1]/");
+    bad("http://[64:ff9b::7f00:1]/"); // NAT64 can map to private IPv4
+    bad("http://[0:0:0:0:0:0:0:1]/");
+    bad("http://localhost./");
+    bad("http://foo.internal./");
+    bad("http://user:pass@example.com/");
+    bad("http://example.com:8080/");
+    bad("http://example.com:0/");
+    ok("https://[2a00:1450:4001:81b::200e]/");
+  });
 });

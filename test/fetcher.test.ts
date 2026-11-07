@@ -59,6 +59,42 @@ describe("fetchChecked", () => {
   });
 });
 
+describe("time limits", () => {
+  it("stops reading a body that never finishes", async () => {
+    const impl: FetchImpl = async (_u, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode("<html>"));
+          // never closes
+        },
+      });
+      void init;
+      return new Response(body, { status: 200 });
+    };
+    const original = AbortSignal.timeout;
+    AbortSignal.timeout = () => original.call(AbortSignal, 50);
+    try {
+      await expect(fetchChecked("https://example.com/", impl)).rejects.toMatchObject({ code: "timeout" });
+    } finally {
+      AbortSignal.timeout = original;
+    }
+  });
+
+  it("applies one overall deadline across redirects", async () => {
+    const impl: FetchImpl = async () => redirect("https://example.com/next");
+    await expect(
+      fetchChecked("https://example.com/", impl, { deadline: Date.now() - 1 }),
+    ).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("blocks credentials and odd ports on redirect targets", async () => {
+    for (const loc of ["http://user:pw@example.com/", "https://example.com:8443/", "https://[::1]/", "https://[::ffff:7f00:1]/"]) {
+      const impl: FetchImpl = async () => redirect(loc);
+      await expect(fetchChecked("https://example.com/", impl)).rejects.toMatchObject({ code: "blocked_target" });
+    }
+  });
+});
+
 describe("collect", () => {
   it("assembles the audit input from page, http test, robots and sitemap", async () => {
     const impl: FetchImpl = async (u) => {

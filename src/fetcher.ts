@@ -10,6 +10,8 @@ export const LIMITS = {
   auxMaxBytes: 200_000,
   maxRedirects: 5,
   timeoutMs: 8_000,
+  /** Upper bound for the whole audit including redirects and helper requests. */
+  totalTimeoutMs: 15_000,
 };
 
 const USER_AGENT = "website-audit/1.0 (simple site check; unofficial)";
@@ -44,14 +46,24 @@ function headersToObject(h: Headers): Record<string, string> {
   return out;
 }
 
-async function readLimited(res: Response, maxBytes: number): Promise<{ body: string; bytes: number; truncated: boolean }> {
+async function readLimited(res: Response, maxBytes: number, signal: AbortSignal): Promise<{ body: string; bytes: number; truncated: boolean }> {
   if (!res.body) return { body: "", bytes: 0, truncated: false };
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
+  const aborted = new Promise<never>((_, reject) => {
+    const fail = () => reject(signal.reason ?? new DOMException("Timed out", "TimeoutError"));
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+  aborted.catch(() => {}); // avoid an unhandled rejection when the read finishes first
   for (;;) {
-    const { done, value } = await reader.read();
+    // Race against the deadline so a server that trickles bytes cannot hold the request open.
+    const { done, value } = await Promise.race([reader.read(), aborted]).catch(async (e) => {
+      await reader.cancel().catch(() => {});
+      throw e;
+    });
     if (done) break;
     if (total + value.byteLength > maxBytes) {
       chunks.push(value.subarray(0, maxBytes - total));
@@ -79,17 +91,22 @@ async function readLimited(res: Response, maxBytes: number): Promise<{ body: str
 export async function fetchChecked(
   startUrl: string,
   fetchImpl: FetchImpl,
-  opts: { maxBytes?: number; followRedirects?: boolean } = {},
+  opts: { maxBytes?: number; followRedirects?: boolean; deadline?: number } = {},
 ): Promise<Fetched> {
   const maxBytes = opts.maxBytes ?? LIMITS.maxBytes;
   const follow = opts.followRedirects ?? true;
   const started = Date.now();
+  const deadline = opts.deadline ?? started + LIMITS.totalTimeoutMs;
   let current = startUrl;
   let redirects = 0;
 
   for (;;) {
     const check = validateTarget(current);
     if (!check.ok) throw new AuditError("blocked_target", check.reason);
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new AuditError("timeout", "The site did not respond in time.");
+    const signal = AbortSignal.timeout(Math.min(LIMITS.timeoutMs, remaining));
 
     let res: Response;
     try {
@@ -105,7 +122,7 @@ export async function fetchChecked(
           accept: "text/html,application/xhtml+xml,*/*;q=0.5",
           "accept-encoding": "gzip",
         },
-        signal: AbortSignal.timeout(LIMITS.timeoutMs),
+        signal,
       });
     } catch (e) {
       if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
@@ -133,7 +150,7 @@ export async function fetchChecked(
 
     let read;
     try {
-      read = await readLimited(res, maxBytes);
+      read = await readLimited(res, maxBytes, signal);
     } catch (e) {
       if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) {
         throw new AuditError("timeout", "The site did not respond in time.");
@@ -153,14 +170,15 @@ export async function fetchChecked(
 
 /** Fetches the page plus the small helper resources and builds the input for analyze(). */
 export async function collect(requestedUrl: string, fetchImpl: FetchImpl): Promise<AuditInput> {
-  const page = await fetchChecked(requestedUrl, fetchImpl);
+  const deadline = Date.now() + LIMITS.totalTimeoutMs;
+  const page = await fetchChecked(requestedUrl, fetchImpl, { deadline });
   const final = new URL(page.finalUrl);
   const origin = final.origin;
 
   const httpTest = async (): Promise<AuditInput["httpRedirect"]> => {
     if (final.protocol !== "https:" || final.port) return null;
     try {
-      const r = await fetchChecked(`http://${final.hostname}/`, fetchImpl, { maxBytes: 1, followRedirects: false });
+      const r = await fetchChecked(`http://${final.hostname}/`, fetchImpl, { maxBytes: 1, followRedirects: false, deadline });
       return { redirectsToHttps: r.status >= 300 && r.status < 400 && /^https:\/\//i.test(r.headers["location"] ?? "") };
     } catch {
       return null;
@@ -169,7 +187,7 @@ export async function collect(requestedUrl: string, fetchImpl: FetchImpl): Promi
 
   const aux = async (path: string) => {
     try {
-      return await fetchChecked(origin + path, fetchImpl, { maxBytes: LIMITS.auxMaxBytes });
+      return await fetchChecked(origin + path, fetchImpl, { maxBytes: LIMITS.auxMaxBytes, deadline });
     } catch {
       return null;
     }
