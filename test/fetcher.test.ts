@@ -105,7 +105,7 @@ describe("collect", () => {
     };
     const input = await collect("https://example.com/", impl);
     expect(input.httpRedirect).toEqual({ redirectsToHttps: true });
-    expect(input.robotsTxt).toEqual({ found: true, hasSitemapLine: true });
+    expect(input.robotsTxt).toEqual({ found: true, hasSitemapLine: true, blocksAll: false });
     expect(input.sitemapXml.found).toBe(true);
     expect(input.status).toBe(200);
   });
@@ -120,7 +120,7 @@ describe("collect", () => {
 
 describe("buildInput", () => {
   it("ignores a robots.txt that answered with an error", () => {
-    const page = { finalUrl: "https://a.example/", status: 200, headers: {}, body: "", bytes: 0, truncated: false, redirectCount: 0, ms: 5 };
+    const page = { finalUrl: "https://a.example/", setCookies: [], status: 200, headers: {}, body: "", bytes: 0, truncated: false, redirectCount: 0, ms: 5 };
     const robots = { ...page, status: 404, body: "nope" };
     expect(buildInput("https://a.example/", page, null, robots, null).robotsTxt.found).toBe(false);
   });

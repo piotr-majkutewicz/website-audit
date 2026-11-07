@@ -1,12 +1,15 @@
-import { analyze } from "./audit";
+import { analyzeNeutral, localize } from "./audit";
 import { AuditError, collect } from "./fetcher";
 import { DEFAULT_LANG, dictionary, isLang, type ErrorKey, type Lang } from "./i18n";
 import { validateTarget } from "./ssrf";
+import { runPagespeed } from "./pagespeed";
 import { renderUi } from "./ui";
 
 export interface Env {
   /** Optional: the binding is missing in some local setups and the code copes with that. */
   RATE_LIMITER?: RateLimit;
+  /** Optional secret. When set, the page also offers a measurement by Google PageSpeed Insights. */
+  PAGESPEED_API_KEY?: string;
 }
 
 const MAX_BODY_BYTES = 2048;
@@ -30,7 +33,7 @@ function json(data: unknown, status = 200, extra: Record<string, string> = {}): 
 
 /** Error responses: a stable code plus a message in the requested language. */
 function apiError(status: number, code: string, key: ErrorKey, lang: Lang, extra: Record<string, string> = {}): Response {
-  return json({ error: { code, message: dictionary(lang).errors[key] } }, status, extra);
+  return json({ error: { code, key, message: dictionary(lang).errors[key] } }, status, extra);
 }
 
 /** Language from the ?lang= query parameter. Missing or unknown values give null. */
@@ -77,6 +80,14 @@ async function route(request: Request, env: Env): Promise<Response> {
       return apiError(405, "method_not_allowed", "method_not_allowed", queryLang(url) ?? DEFAULT_LANG, { allow: "POST" });
     }
     return handleAudit(request, env, queryLang(url) ?? DEFAULT_LANG);
+  }
+
+  // Hidden (404) unless the PageSpeed key is configured.
+  if (url.pathname === "/api/pagespeed" && env.PAGESPEED_API_KEY) {
+    if (request.method !== "POST") {
+      return apiError(405, "method_not_allowed", "method_not_allowed", queryLang(url) ?? DEFAULT_LANG, { allow: "POST" });
+    }
+    return handlePagespeed(request, env, queryLang(url) ?? DEFAULT_LANG);
   }
 
   return apiError(404, "not_found", "not_found", queryLang(url) ?? DEFAULT_LANG);
@@ -127,12 +138,43 @@ async function handleAudit(request: Request, env: Env, queryLanguage: Lang): Pro
 
   try {
     const input = await collect(check.url.toString(), (u, init) => fetch(u, init));
-    return json(analyze(input, new Date(), lang));
+    return json(localize(analyzeNeutral(input, new Date(), Boolean(env.PAGESPEED_API_KEY)), lang));
   } catch (e) {
     if (e instanceof AuditError) {
-      const status = e.code === "blocked_target" ? 400 : e.code === "timeout" ? 504 : 502;
+      const status = e.code === "blocked_target" ? 400 : e.code === "timeout" ? 504 : 502; // bad_certificate and the rest: 502
       return apiError(status, e.code, e.messageKey, lang);
     }
     return apiError(500, "internal_error", "internal_error", lang);
   }
+}
+
+/** Second, optional stage: Lighthouse numbers from Google for the address that was audited. */
+async function handlePagespeed(request: Request, env: Env, queryLanguage: Lang): Promise<Response> {
+  const lang = queryLanguage;
+  if (env.RATE_LIMITER) {
+    // Counted separately from the audits of the same visitor.
+    const key = "pagespeed:" + (request.headers.get("cf-connecting-ip") ?? "anonymous");
+    const { success } = await env.RATE_LIMITER.limit({ key });
+    if (!success) return apiError(429, "rate_limited", "rate_limited", lang, { "retry-after": "60" });
+  }
+  let text: string;
+  try {
+    text = await request.text();
+  } catch {
+    return apiError(400, "invalid_body", "body_unreadable", lang);
+  }
+  if (text.length > MAX_BODY_BYTES) return apiError(413, "body_too_large", "body_too_large", lang);
+  let body: { url?: unknown };
+  try {
+    body = (JSON.parse(text) ?? {}) as { url?: unknown };
+  } catch {
+    return apiError(400, "invalid_json", "invalid_json", lang);
+  }
+  if (typeof body.url !== "string") return apiError(400, "invalid_url", "url_missing", lang);
+  const check = validateTarget(body.url);
+  if (!check.ok) return apiError(400, "blocked_target", check.reason, lang);
+
+  const outcome = await runPagespeed(check.url.toString(), env.PAGESPEED_API_KEY!);
+  if (!outcome.ok) return apiError(outcome.status, outcome.key, outcome.key, lang);
+  return json({ pagespeed: outcome.result });
 }

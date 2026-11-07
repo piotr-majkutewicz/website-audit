@@ -28,8 +28,16 @@ export function makeInput(over: Partial<AuditInput> = {}): AuditInput {
     responseTimeMs: 200,
     redirectCount: 0,
     httpRedirect: { redirectsToHttps: true },
-    robotsTxt: { found: true, hasSitemapLine: true },
-    sitemapXml: { found: true },
+    setCookies: [],
+    robotsTxt: { found: true, hasSitemapLine: true, blocksAll: false },
+    sitemapXml: { found: true, info: { wellFormed: true, kind: "urlset", count: 3, hasHome: true, truncated: false } },
+    securityTxt: null,
+    faviconFile: null,
+    wwwVariant: { tested: false, sameTarget: null },
+    linkSample: null,
+    resourceSample: null,
+    requests: 1,
+    hosts: ["greendoor.example"],
     ...over,
   };
 }

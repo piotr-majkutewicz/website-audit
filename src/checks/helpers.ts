@@ -1,5 +1,5 @@
 import type { FindingKey, Params, PassedId } from "../i18n/types";
-import type { CategoryId, CheckOutcome, RawFinding, RawPassed, Severity } from "../types";
+import type { CategoryId, CheckOutcome, Fact, RawFinding, RawPassed, Severity } from "../types";
 
 export interface FindingSpec {
   /** Stable id. For a check that can pass, it is also the id of the passed text. */
@@ -14,6 +14,7 @@ export interface FindingSpec {
 export class Collector {
   readonly findings: RawFinding[] = [];
   readonly passed: RawPassed[] = [];
+  readonly facts: Fact[] = [];
   constructor(private category: CategoryId) {}
 
   fail(f: FindingSpec): void {
@@ -36,7 +37,11 @@ export class Collector {
     else this.fail(f);
   }
 
+  fact(id: Fact["id"], params: Fact["params"] = {}): void {
+    this.facts.push({ id, params });
+  }
+
   result(): CheckOutcome {
-    return { findings: this.findings, passed: this.passed };
+    return { findings: this.findings, passed: this.passed, facts: this.facts };
   }
 }

@@ -46,5 +46,40 @@ export function checkSecurity(input: AuditInput, doc: ParsedHtml): CheckOutcome 
     });
     c.check(mixed.length === 0, { id: "mixed-content", severity: "high", params: { count: mixed.length } });
   }
+
+  // Cookies from this one response. Cookies set by scripts or on other pages are not visible here.
+  const cookies = input.setCookies.map(parseCookie);
+  c.fact("cookiesCount", { count: cookies.length });
+  if (cookies.length > 0) {
+    const noSecure = cookies.filter((k) => !k.secure).length;
+    const noHttpOnly = cookies.filter((k) => !k.httpOnly).length;
+    const noSameSite = cookies.filter((k) => !k.sameSite).length;
+    if (isHttps) {
+      if (noSecure > 0) c.fail({ id: "cookies-secure", severity: "medium", params: { count: noSecure, total: cookies.length } });
+    }
+    if (noHttpOnly > 0) c.fail({ id: "cookies-httponly", severity: "low", params: { count: noHttpOnly, total: cookies.length } });
+    if (noSameSite > 0) c.fail({ id: "cookies-samesite", severity: "low", params: { count: noSameSite, total: cookies.length } });
+    // One passed entry when every flag is set.
+    if ((isHttps ? noSecure : 0) + noHttpOnly + noSameSite === 0) c.pass("cookies");
+  }
+
+  if (input.securityTxt !== null) {
+    c.check(input.securityTxt, { id: "security-txt", severity: "low" });
+  }
   return c.result();
+}
+
+interface CookieFlags {
+  secure: boolean;
+  httpOnly: boolean;
+  sameSite: boolean;
+}
+
+function parseCookie(header: string): CookieFlags {
+  const attrs = header.split(";").slice(1).map((a) => a.trim().toLowerCase());
+  return {
+    secure: attrs.includes("secure"),
+    httpOnly: attrs.includes("httponly"),
+    sameSite: attrs.some((a) => a.startsWith("samesite=")),
+  };
 }

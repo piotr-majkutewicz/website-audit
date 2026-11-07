@@ -1,4 +1,4 @@
-import { findAll, type ParsedHtml } from "../html";
+import { findAll, metaContent, type ParsedHtml } from "../html";
 import type { AuditInput, CheckOutcome } from "../types";
 import { Collector } from "./helpers";
 
@@ -47,6 +47,15 @@ export function checkAccessibility(_input: AuditInput, doc: ParsedHtml): CheckOu
   }
   if (levels.length > 0) {
     c.check(skips.length === 0, { id: "heading-order", severity: "low", params: { skips: skips.slice(0, 3).join(", ") } });
+  }
+
+  // A viewport that blocks pinch zoom shuts out people who need larger text.
+  const viewport = metaContent(doc, "name", "viewport");
+  if (viewport) {
+    const v = viewport.toLowerCase().replace(/\s+/g, "");
+    const max = /maximum-scale=([\d.]+)/.exec(v);
+    const blocked = /user-scalable=(no|0)/.test(v) || (max !== null && Number(max[1]) <= 1);
+    c.check(!blocked, { id: "zoom", key: "viewport-zoom", severity: "medium" });
   }
 
   return c.result();

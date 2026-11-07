@@ -60,6 +60,27 @@ export const FINDING_KEYS = [
   "img-alt",
   "form-labels",
   "heading-order",
+  "cookies-secure",
+  "cookies-httponly",
+  "cookies-samesite",
+  "security-txt",
+  "jsonld.none",
+  "jsonld.invalid",
+  "robots-blocks-all",
+  "robots-no-sitemap",
+  "sitemap.invalid",
+  "sitemap.empty",
+  "sitemap.noHome",
+  "hreflang.mismatch",
+  "favicon",
+  "redirect-chain",
+  "www-split",
+  "broken-links",
+  "broken-resources",
+  "heavy-images",
+  "image-formats",
+  "static-cache",
+  "viewport-zoom",
 ] as const;
 export type FindingKey = (typeof FINDING_KEYS)[number];
 
@@ -97,6 +118,22 @@ export const PASSED_IDS = [
   "img-alt",
   "form-labels",
   "heading-order",
+  "cookies",
+  "security-txt",
+  "structured-data",
+  "robots-open",
+  "robots-sitemap",
+  "sitemap-valid",
+  "hreflang",
+  "favicon",
+  "redirects",
+  "www-canonical",
+  "links",
+  "resources",
+  "image-weight",
+  "image-formats",
+  "static-cache",
+  "zoom",
 ] as const;
 export type PassedId = (typeof PASSED_IDS)[number];
 
@@ -116,6 +153,7 @@ export const ERROR_KEYS = [
   // Fetching
   "timeout",
   "unreachable",
+  "certificate",
   "too_many_redirects",
   "bad_redirect",
   "interrupted",
@@ -129,10 +167,79 @@ export const ERROR_KEYS = [
   "url_missing",
   "invalid_lang",
   "internal_error",
+  // Optional PageSpeed Insights measurement
+  "pagespeed_quota",
+  "pagespeed_failed",
+  "pagespeed_timeout",
+  "pagespeed_unavailable",
 ] as const;
 export type ErrorKey = (typeof ERROR_KEYS)[number];
 
+/** How a finding was measured. The text says it in one sentence next to the finding. */
+export const BASIS_KINDS = [
+  "headers",
+  "html",
+  "request",
+  "redirect",
+  "robots",
+  "sitemap",
+  "links",
+  "resources",
+  "cookies",
+  "jsonld",
+  "securityTxt",
+  "favicon",
+  "variant",
+] as const;
+export type BasisKind = (typeof BASIS_KINDS)[number];
+
+/** Measured facts listed under "What was found". */
+export const FACT_KEYS = [
+  "structuredTypes",
+  "noStructuredData",
+  "cookiesCount",
+  "redirectsCount",
+  "linksChecked",
+  "resourcesChecked",
+  "imageFormats",
+  "sitemapUrls",
+  "hreflangCodes",
+] as const;
+export type FactKey = (typeof FACT_KEYS)[number];
+
 export const UI_KEYS = [
+  "topHeading",
+  "impactLabel",
+  "basisLabel",
+  "factsHeading",
+  "coverageHeading",
+  "coverageSummary",
+  "coverageSample",
+  "coverageNoSample",
+  "scoringSummary",
+  "scoringIntro",
+  "scoringWeights",
+  "scoringPenalty",
+  "psiHeading",
+  "psiLoading",
+  "psiSource",
+  "psiScore",
+  "psiScoreHelp",
+  "psiLcp",
+  "psiLcpHelp",
+  "psiCls",
+  "psiClsHelp",
+  "psiTbt",
+  "psiTbtHelp",
+  "psiFcp",
+  "psiFcpHelp",
+  "psiInp",
+  "psiInpHelp",
+  "psiGood",
+  "psiNeeds",
+  "psiPoor",
+  "psiError",
+  "errorHintCertificate",
   "metaTitle",
   "metaDescription",
   "heading",
@@ -176,6 +283,8 @@ export interface FindingText {
   title: string;
   why: string;
   fix: string;
+  /** One sentence: what this means for the business of the site owner. */
+  impact: string;
   /** Template for the measured detail, filled from the finding's params. */
   detail?: string;
 }
@@ -185,6 +294,8 @@ export interface Dictionary {
   categories: Record<CategoryId, string>;
   findings: Record<FindingKey, FindingText>;
   passed: Record<PassedId, string>;
+  basis: Record<BasisKind, string>;
+  facts: Record<FactKey, string>;
   notChecked: string[];
   disclaimer: string;
   errors: Record<ErrorKey, string>;

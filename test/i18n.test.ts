@@ -3,8 +3,7 @@ import { CHECKS } from "../src/audit";
 import { parseHtml } from "../src/html";
 import { dictionary, ERROR_KEYS, FINDING_KEYS, format, LANGS, PASSED_IDS, UI_KEYS } from "../src/i18n";
 import { analyze } from "../src/audit";
-import { fixture, GOOD_HEADERS, makeInput } from "./helpers";
-import type { AuditInput } from "../src/types";
+import { FAILING, fullGood } from "./scenarios";
 
 const BAD_TEXT = /\{\w+\}|undefined|\bTODO\b|\bTBD\b|lorem|xxx|\[object/i;
 
@@ -80,32 +79,7 @@ describe("dictionaries", () => {
 });
 
 describe("coverage of the checks", () => {
-  const goodHtml = fixture("good.html");
-  const page = (head: string, body = "<h1>Heading</h1>") =>
-    `<html lang="en"><head><meta name="viewport" content="width=device-width">${head}</head><body>${body}</body></html>`;
-  const scripts = (n: number) => Array.from({ length: n }, (_, i) => `<script src="/s${i}.js" defer></script>`).join("");
-  const styles = (n: number) => Array.from({ length: n }, (_, i) => `<link rel="stylesheet" href="/c${i}.css">`).join("");
-  const goodWith = (over: Partial<AuditInput>) => makeInput({ html: goodHtml, headers: GOOD_HEADERS, ...over });
-
-  const scenarios: AuditInput[] = [
-    makeInput({
-      html: fixture("bad.html"), finalUrl: "https://bad.example/", headers: {},
-      httpRedirect: { redirectsToHttps: false }, robotsTxt: { found: false, hasSitemapLine: false }, sitemapXml: { found: false },
-    }),
-    goodWith({ finalUrl: "http://greendoor.example/", httpRedirect: null }),
-    goodWith({ headers: { ...GOOD_HEADERS, "strict-transport-security": "max-age=300" }, truncated: true, responseTimeMs: 3000 }),
-    goodWith({ htmlBytes: 600_000, responseTimeMs: 1000, status: 404 }),
-    goodWith({ htmlBytes: 250_000 }),
-    goodWith({ htmlBytes: 50_000, headers: { ...GOOD_HEADERS, "content-encoding": "identity" } }),
-    goodWith({ htmlBytes: 50_000, headers: { ...GOOD_HEADERS, "content-encoding": "" } }),
-    makeInput({ html: page("<title>Hi</title><meta name=\"description\" content=\"short\">"), headers: GOOD_HEADERS }),
-    makeInput({ html: page(`<title>${"T".repeat(80)}</title><meta name="description" content="${"d".repeat(200)}">`), headers: GOOD_HEADERS }),
-    makeInput({ html: page("", "<h1>A</h1><h1>B</h1>"), headers: GOOD_HEADERS }),
-    makeInput({ html: page("", "<p>No heading</p>"), headers: GOOD_HEADERS }),
-    makeInput({ html: page(scripts(16) + styles(9)), headers: GOOD_HEADERS }),
-    makeInput({ html: page("").replace('lang="en"', 'lang="not valid!"'), headers: GOOD_HEADERS }),
-    makeInput({ html: page("").replace(' lang="en"', ""), headers: GOOD_HEADERS }),
-  ];
+  const scenarios = FAILING;
 
   it("every finding the checks can produce has a text in both languages", () => {
     const seen = new Set<string>();
@@ -118,7 +92,7 @@ describe("coverage of the checks", () => {
 
   it("every passed check has a text, and every text is fully filled in", () => {
     const passed = new Set<string>();
-    const good = goodWith({});
+    const good = fullGood();
     for (const check of CHECKS) for (const p of check(good, parseHtml(good.html)).passed) passed.add(p.id);
     expect([...passed].sort()).toEqual([...PASSED_IDS].sort());
 

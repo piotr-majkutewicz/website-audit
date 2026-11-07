@@ -38,8 +38,8 @@ describe("analyze on a bad page", () => {
     finalUrl: "https://bad.example/",
     headers: {},
     httpRedirect: { redirectsToHttps: false },
-    robotsTxt: { found: false, hasSitemapLine: false },
-    sitemapXml: { found: false },
+    robotsTxt: { found: false, hasSitemapLine: false, blocksAll: false },
+    sitemapXml: { found: false, info: null },
   });
   const report = analyze(badInput);
   const found = ids(report);
@@ -106,7 +106,7 @@ describe("individual rules", () => {
     expect(run({ headers: { ...GOOD_HEADERS, "x-robots-tag": "noindex" } })).toContain("noindex");
   });
   it("takes a sitemap line in robots.txt as enough", () => {
-    expect(run({ sitemapXml: { found: false }, robotsTxt: { found: true, hasSitemapLine: true } })).not.toContain("sitemap");
+    expect(run({ sitemapXml: { found: false, info: null }, robotsTxt: { found: true, hasSitemapLine: true, blocksAll: false } })).not.toContain("sitemap");
   });
   it("flags error status codes", () => {
     expect(run({ status: 404 })).toContain("status");

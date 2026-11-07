@@ -1,5 +1,6 @@
 import { findAll, type ParsedHtml } from "../html";
 import type { AuditInput, CheckOutcome } from "../types";
+import { exampleList } from "./seo";
 import { Collector } from "./helpers";
 
 // These thresholds are rules of thumb, not measurements of real user experience.
@@ -10,6 +11,11 @@ const VERY_SLOW_MS = 2000;
 const MANY_SCRIPTS = 15;
 const MANY_STYLESHEETS = 8;
 const COMPRESSIBLE_MIN_BYTES = 10 * 1024;
+// Image weight rules of thumb (Content-Length of the image file as served).
+export const HEAVY_IMAGE_BYTES = 300 * 1024;
+export const VERY_HEAVY_IMAGE_BYTES = 1024 * 1024;
+// A static file counts as weakly cached when it can be reused for less than a day.
+export const WEAK_CACHE_SECONDS = 24 * 3600;
 
 export function checkPerformance(input: AuditInput, doc: ParsedHtml): CheckOutcome {
   const c = new Collector("performance");
@@ -75,5 +81,79 @@ export function checkPerformance(input: AuditInput, doc: ParsedHtml): CheckOutco
     params: { count: notLazy.length, total: Math.max(imgs.length - 1, 0) },
   });
 
+
+  // Sampled images, styles and scripts of the same site
+  const rs = input.resourceSample;
+  if (rs && rs.items.length > 0) {
+    const items = rs.items;
+    const broken = items.filter((r) => isBroken(r.status));
+    c.fact("resourcesChecked", { checked: items.length, total: rs.total });
+    c.check(broken.length === 0, {
+      id: "resources",
+      key: "broken-resources",
+      severity: "medium",
+      params: {
+        count: broken.length,
+        checked: items.length,
+        total: rs.total,
+        examples: exampleList(broken.map((r) => ({ path: r.path, status: r.status }))),
+      },
+    });
+
+    const images = items.filter((r) => r.kind === "image" && r.status >= 200 && r.status < 300);
+    const sized = images.filter((r) => r.bytes !== null);
+    if (sized.length > 0) {
+      const heavy = sized.filter((r) => r.bytes! > HEAVY_IMAGE_BYTES);
+      const maxKb = Math.round(Math.max(...sized.map((r) => r.bytes!)) / 1024);
+      const veryHeavy = sized.some((r) => r.bytes! > VERY_HEAVY_IMAGE_BYTES);
+      c.check(heavy.length === 0, {
+        id: "image-weight",
+        key: "heavy-images",
+        severity: veryHeavy || heavy.length >= 3 ? "medium" : "low",
+        params: { count: heavy.length, checked: sized.length, total: rs.total, maxKb },
+      });
+    }
+    const typed = images.filter((r) => imageFormat(r) !== "other");
+    if (typed.length >= 2) {
+      const modern = typed.filter((r) => imageFormat(r) === "modern").length;
+      c.fact("imageFormats", { modern, legacy: typed.length - modern, checked: typed.length });
+      c.check(modern > 0, { id: "image-formats", severity: "low", params: { count: typed.length, checked: typed.length, total: rs.total } });
+    }
+
+    const ok = items.filter((r) => r.status >= 200 && r.status < 300);
+    if (ok.length >= 2) {
+      const weak = ok.filter((r) => cacheSeconds(r) < WEAK_CACHE_SECONDS);
+      c.check(weak.length * 2 < ok.length, {
+        id: "static-cache",
+        severity: "low",
+        params: { count: weak.length, checked: ok.length, total: rs.total },
+      });
+    }
+  }
+
   return c.result();
+}
+
+function isBroken(status: number): boolean {
+  // 401, 403 and 429 usually mean "not for robots", not a missing file.
+  return (status >= 400 && ![401, 403, 429].includes(status)) || status === 0;
+}
+
+/** "modern" is webp or avif, "legacy" is jpeg or png, anything else (svg, gif, unknown) is "other". */
+function imageFormat(r: { contentType: string; path: string }): "modern" | "legacy" | "other" {
+  const ct = r.contentType.toLowerCase();
+  const ext = /\.([a-z0-9]+)(?:\?|$)/i.exec(r.path)?.[1]?.toLowerCase() ?? "";
+  if (/webp|avif/.test(ct) || ext === "webp" || ext === "avif") return "modern";
+  if (/jpe?g|png/.test(ct) || ["jpg", "jpeg", "png"].includes(ext)) return "legacy";
+  return "other";
+}
+
+/** How long the response can be reused: max-age or s-maxage in seconds, from Expires as unknown. */
+function cacheSeconds(r: { cacheControl: string; hasExpires: boolean }): number {
+  const cc = r.cacheControl.toLowerCase();
+  if (/no-store|no-cache/.test(cc)) return 0;
+  const m = /(?:s-maxage|max-age)=(\d+)/.exec(cc);
+  if (m) return Number(m[1]);
+  // Expires without max-age: the date is not parsed, so it is counted as long enough.
+  return r.hasExpires ? WEAK_CACHE_SECONDS : 0;
 }
