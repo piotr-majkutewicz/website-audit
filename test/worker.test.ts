@@ -191,4 +191,26 @@ describe("languages", () => {
     expect(html).not.toMatch(/innerHTML|insertAdjacentHTML/);
     expect(res.headers.get("content-security-policy")).toContain("style-src 'nonce-");
   });
+
+  it("returns a language-neutral view next to the texts, and error keys", async () => {
+    stubSite();
+    const report = (await (await audit({ lang: "en" })).json()) as any;
+    expect(report.neutral.findings[0]).toMatchObject({ id: expect.any(String), key: expect.any(String), params: expect.any(Object), basis: expect.any(String) });
+    expect(report.neutral.findings.map((f: any) => f.id)).toEqual(report.findings.map((f: any) => f.id));
+    expect(report.neutral.findings.every((f: any) => f.title === undefined)).toBe(true);
+    expect(report.findings[0].impact).toBeTruthy();
+    expect(report.findings[0].basis).toBeTruthy();
+    expect(report.coverage.requests).toBeGreaterThan(0);
+    const blocked = (await (await call("/api/audit", { method: "POST", body: JSON.stringify({ url: "http://127.0.0.1/" }) })).json()) as any;
+    expect(blocked.error).toMatchObject({ code: "blocked_target", key: "ip_not_public" });
+  });
+
+  it("reports a certificate problem as its own error", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("certificate has expired");
+    });
+    const res = await audit({ lang: "en" });
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as any).error).toMatchObject({ code: "bad_certificate", key: "certificate", message: "There is a problem with the site's HTTPS certificate." });
+  });
 });
