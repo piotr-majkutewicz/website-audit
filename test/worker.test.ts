@@ -173,4 +173,22 @@ describe("languages", () => {
     expect(html).toContain('"pl":{');
     expect(html).toContain('"en":{');
   });
+
+  it("has an accessible loading and result region, and keeps the CSP free of inline styles", async () => {
+    const res = await call("/");
+    const html = await res.text();
+    expect(html).toMatch(/<div id="result" class="result" aria-busy="false">/);
+    expect(html).toMatch(/<div id="live" class="sr-only" role="status" aria-live="polite"><\/div>/);
+    expect(html).toContain('id="skeleton"');
+    expect(html).toContain('id="retry"');
+    expect(html).toContain("Pobieram stronę i analizuję ją, to zwykle trwa kilka sekund");
+    // Animations respect the reduced motion setting.
+    expect(html).toContain("@media (prefers-reduced-motion:no-preference)");
+    expect(html).toContain("@media (prefers-reduced-motion:reduce)");
+    // style-src allows only the nonce, so there must be no style attributes in the markup
+    // (the script sets styles through the CSSOM, which the policy permits).
+    expect(html).not.toMatch(/\sstyle="/);
+    expect(html).not.toMatch(/innerHTML|insertAdjacentHTML/);
+    expect(res.headers.get("content-security-policy")).toContain("style-src 'nonce-");
+  });
 });

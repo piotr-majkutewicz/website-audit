@@ -51,6 +51,30 @@ The response contains stable ids and texts in the requested language:
 
 The checks in `src/checks/` return only ids, a text key and parameters (for example `{ count: 2, total: 5 }`). All user-facing text is in `src/i18n/pl.ts` and `src/i18n/en.ts`, typed by `src/i18n/types.ts`, which lists every key. A missing key is a TypeScript error, and `test/i18n.test.ts` checks that every finding the checks can produce has a non-empty text in both languages, with no leftover `{placeholders}`. To add a language, add a dictionary and register it in `src/i18n/index.ts` and `LANGS`.
 
+## Loading states and accessibility
+
+An audit takes a few seconds, so the page reacts at once (measured at about 12 ms between the click and the first painted frame in the browser test):
+
+- The button switches to "Sprawdzam stronę..." with a CSS spinner, and the button and the address field are locked, so a second submit sends nothing.
+- A loading note with an indeterminate progress bar appears over skeleton cards that use the same markup sizes as the real report (score row, four category cards, heading). The first screen of the report does not move or resize when the result replaces the skeleton; the browser test checks this with a tolerance of 3 px. The report itself is longer than the skeleton, so only content further down the page moves.
+- The text is honest: it says that the page is being fetched and analysed, and does not invent stages. After 8 seconds of real waiting it changes to a "responding slowly" notice. After 20 seconds the request is abandoned (the server stops by itself after about 15 seconds) and an error with a "Try again" button is shown.
+- Errors (blocked address, rate limit, slow or unreachable site, network failure) appear in the same place with an icon, the message and a short hint, in the selected language.
+- When the result arrives, cards appear in a short cascade, the score counts up from 0, and the category bars fill up. The page is scrolled to the report only if the report starts below the visible area and the person has not scrolled in the meantime.
+- Switching the language with a visible report keeps the old report in place, dimmed, with the loading note over it, and keeps the content where it was on the screen.
+
+Accessibility: the result region has `aria-busy`, and a separate `role="status"` / `aria-live="polite"` region announces "Trwa sprawdzanie" / "Check in progress", the slow notice, "Gotowe, ocena X na 100" / "Done, score X out of 100" or the error. With `prefers-reduced-motion: reduce` all of these animations are off: the spinner and the skeleton are static, the progress bar is a static bar, the score and the bars show their final values at once. Touch targets are at least 44 px. Styles for the animations are in the existing nonce-protected style block, and the script sets styles only through the CSSOM, so the Content-Security-Policy is unchanged.
+
+Browser tests (Playwright, iPhone 13 and a 1280 px desktop) are in `test/e2e/ui.e2e.mjs` and are not part of `npm test`, because they need a browser and a running dev server. Playwright is not a dependency of this project:
+
+```bash
+npx wrangler dev --port 8963 &
+npm run test:e2e -- http://127.0.0.1:8963
+```
+
+They use two real audits of `https://example.com` (so they need network access) to build canned API responses, and a fake clock for the 8 and 20 second cases.
+
+![The loading state at 390 px](docs/ui-loading.png)
+
 ## Who it is for
 
 - Owners of small business sites who want a quick, jargon-free look at the basics.
@@ -193,10 +217,11 @@ If the check needs new data (for example another header or file), add it to `Aud
 Measured on 2026-11-07:
 
 - `npm run typecheck` passes with no errors.
-- `npm test`: 5 test files, 62 tests, all passing, no network used.
+- `npm test`: 5 test files, 63 tests, all passing, no network used.
 - `npx wrangler dev` plus `curl`: `POST /api/audit` for `https://example.com` returned a report (score 64 at that time; the number depends on the live page and will change). `http://127.0.0.1` and `http://localhost` returned `400 blocked_target`. After 10 requests within a minute the local rate limiter answered `429`. A bare `github.com` was normalized to `https://github.com/` and audited.
 - The noindex header was checked with `wrangler dev` and `curl` on `/`, `/robots.txt`, `/api/audit` errors and a 404.
 - Language switch checked with Playwright against `wrangler dev`: default Polish with an English browser locale, switching with the keyboard, the choice kept after reload, `?lang=` taking precedence, and a working switch when `localStorage` throws. The switch buttons are 44 px high.
+- Browser tests (`test/e2e/ui.e2e.mjs`): 132 checks passed in Chromium on an iPhone 13 profile and a 1280 px desktop, against `wrangler dev`. They cover loading state timing, locked form, no layout jump, announcements, slow and timeout cases with a fake clock, error states, reduced motion, language switch with a report, touch and wheel scrolling, horizontal overflow and console errors. I did not test Safari, Firefox or a screen reader.
 - I have not deployed this to Cloudflare, so the behavior of the rate limiter and outbound requests in production is untested.
 
 ## Limitations
