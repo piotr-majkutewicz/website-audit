@@ -1,4 +1,5 @@
 import { DEFAULT_LANG, dictionary, LANGS, type Lang, type UiKey } from "./i18n";
+import { DEBUG_SCROLL_JS } from "./debug-scroll.js";
 
 /** The whole UI is one static page. Report data is only ever inserted with textContent. */
 export function renderUi(nonce: string, lang: Lang = DEFAULT_LANG): string {
@@ -10,7 +11,8 @@ export function renderUi(nonce: string, lang: Lang = DEFAULT_LANG): string {
   );
   const pressed = (l: Lang) => (l === lang ? "true" : "false");
 
-  return PAGE.replaceAll("__NONCE__", nonce)
+  return PAGE.replace("__DEBUG_JS__", () => DEBUG_SCROLL_JS)
+    .replaceAll("__NONCE__", nonce)
     .replaceAll("__LANG__", lang)
     .replaceAll("__META_TITLE__", t("metaTitle"))
     .replaceAll("__META_DESCRIPTION__", t("metaDescription"))
@@ -185,6 +187,7 @@ ul.plain{padding-left:20px}
   <p class="cta"><span data-i18n="ctaText">__CTA_TEXT__</span> <a href="https://piotrmajkutewicz.pl" rel="noopener" data-i18n="ctaLink">__CTA_LINK__</a></p>
   <p class="note muted" id="disclaimer" data-i18n="disclaimer">__DISCLAIMER__</p>
 </main>
+<script nonce="__NONCE__">__DEBUG_JS__</script>
 <script nonce="__NONCE__">
 (function () {
   var TEXTS = __TEXTS__;

@@ -169,7 +169,7 @@ describe("languages", () => {
     expect(html).toMatch(/try \{ window\.localStorage\.setItem\("lang"/);
     expect(html).not.toMatch(/innerHTML|insertAdjacentHTML|document\.write/);
     const nonce = /nonce-([^']+)'/.exec(res.headers.get("content-security-policy")!)![1]!;
-    expect(html.split(`nonce="${nonce}"`).length - 1).toBe(2); // one style, one script
+    expect(html.split(`nonce="${nonce}"`).length - 1).toBe(3); // one style, one script
     expect(html).toContain('"pl":{');
     expect(html).toContain('"en":{');
   });
