@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "website-audit",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-07",
+  // Rate limit: 10 audits per minute per key (client IP), counted separately in each Cloudflare location.
+  // namespace_id is any positive integer written as a string. It is not an account identifier.
+  // The code handles a missing binding (for example in local development).
+  "ratelimits": [
+    {
+      "name": "RATE_LIMITER",
+      "namespace_id": "4711",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ]
+}
